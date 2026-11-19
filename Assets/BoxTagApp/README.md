@@ -21,7 +21,7 @@ Change `AndroidPackageName` in `Editor/BoxTagAppBuild.cs` to use a different pac
 
 | File | Role |
 |---|---|
-| `Scripts/BoxTagLayout.cs` | **All panel and text sizes/positions.** Inspector fields on the `BoxTagLayout` object. Right grip re-places the panels. Logs the rendered text size. |
+| `Scripts/BoxTagLayout.cs` | **All panel and text sizes/positions.** Builds each panel as one world-space canvas (TMP text, layout groups) at runtime. Inspector fields on the `BoxTagLayout` object. Right grip re-places the panels. |
 | `Scripts/BoxTagCameraFeed.cs` | L1. Shows the live camera (MRUK `PassthroughCameraAccess`) on the feed panel. |
 | `Scripts/BoxTagCapture.cs` | L2. Button press → one frame, pose/timestamp/intrinsics for that frame, shows the frame and the IDs. Beep and flash on capture. |
 | `Scripts/BoxTagDetector.cs` | L2. tag36h11 detection on a **worker thread**. |
@@ -57,28 +57,40 @@ Setup Scene keeps this asset on later runs, so your URL is not overwritten.
 3. Remote URL. On success it replaces the data and is saved to the cache. Status `DB: online`.
 
 **Results on the panel:** `ID 1 -> Box no 1`, or `ID 5 -> (not in database)`.
-**Status line:** bottom-left of the feed, for example `DB: online, 2 tags`.
+**Status row:** under the feed's camera image. `DB: ...` on the left, for example `DB: online, 2 tags`, and `Build ...` on the right.
 **Left X:** reloads the remote file. The result shows as `DB reloaded: N tags` for 3 seconds.
 
 ## Layout settings (tweak in the Inspector, no code change)
 
-Select the `BoxTagLayout` object in the scene. Units are metres. Text heights are **rendered** heights.
+Select the `BoxTagLayout` object in the scene. Placement is in **metres**. Panel and text sizes are in
+**millimetres**: each panel is a world-space canvas with 1 canvas unit = 1 mm, and font sizes are
+the mm em size.
 
 | Setting | Default | Meaning |
 |---|---|---|
-| Feed Width Meters | 0.45 | Live feed width. Height follows the 4:3 image. |
+| Feed Width Meters | 0.45 | Live feed panel width. Height follows its content (4:3 image). |
 | Feed Distance Meters | 1.0 | Distance straight ahead of the head. |
 | Feed Height Offset Meters | -0.15 | Negative = lower than eye level. |
 | Feed Tilt Degrees | 10 | Positive leans the top toward the user. |
-| Captured Width Meters | 0.30 | Captured frame width. Centred vertically on the feed. |
-| Gap Meters | 0.05 | Gap between the feed and the captured frame. |
-| Title Height Meters | 0.01 | "Captured frame" title. |
-| ID Line Height Meters | 0.02 | Detected-ID text, per line. Never wider than the captured panel. |
-| Build Height Meters | 0.006 | Build label (bottom-right of the feed). |
-| Database Height Meters | 0.008 | Database status line (bottom-left of the feed). |
+| Captured Width Meters | 0.30 | Captured panel width. Top edge level with the feed's top; the results grow downward. |
+| Gap Meters | 0.05 | Gap between the two panels. |
+| Panel Padding Mm | 8 | Padding inside each panel. The dark background covers it. |
+| Row Spacing Mm | 4 | Space between title, image and status/results. |
+| Background Color | black, alpha 0.6 | Panel background (60% opaque). |
+| Text Color | white | All panel text. |
+| Title Font Size | 10 | "Live camera" and "Captured frame". |
+| Result Font Size | 18 | One line per tag, for example `ID 1 -> Box no 1`. |
+| Status Font Size | 7 | `DB: ...` (left) and `Build ...` (right) under the feed image. |
+| Max Result Lines | 5 | More tags than this: the last line reads `+N more`. |
+| Row Height Factor | 1.3 | Row height = font size × factor. |
+| Result Spacing Mm | 2 | Space between result lines. |
 
-**Checking the text size:** each text logs `[BoxTag] text '...' rendered size: height=… m, width=… m`.
-If the height in the log is not the target, the scaling is wrong. Tell me the log line.
+Text never leaves its row. A row that is too long is cut with an ellipsis.
+
+**TextMeshPro:** the project needs its **TMP Essentials** once: in the Editor, `Window > TextMeshPro >
+Import TMP Essentials`. Without it no text is drawn, and `[BoxTag] No TMP default font` is logged.
+
+**Layout check:** the first placement logs `[BoxTag] panel size mm: feed WxH, captured WxH`.
 
 Right grip: press to re-place the panels in front of your current head position.
 

@@ -38,16 +38,12 @@ namespace BoxTagApp
         [Tooltip("Tag ID -> label database (set by Setup Scene).")]
         [SerializeField] private BoxTagDatabase m_database;
 
-        [Tooltip("Layout that sizes and places the panels and text (set by Setup Scene).")]
+        [Tooltip("Layout that owns the panels, the captured image and the results text (set by Setup Scene).")]
         [SerializeField] private BoxTagLayout m_layout;
-
-        [Tooltip("Quad that shows the captured frame.")]
-        [SerializeField] private Renderer m_capturedScreen;
 
         private Texture2D m_capturedTexture;
         private AudioSource m_audio;
         private AudioClip m_beep;
-        private Coroutine m_flash;
 
         private void Awake()
         {
@@ -181,19 +177,14 @@ namespace BoxTagApp
             m_capturedTexture.SetPixels32(frame.Pixels);
             m_capturedTexture.Apply();
 
-            if (m_capturedScreen == null)
-            {
-                return;
-            }
-            m_capturedScreen.material.mainTexture = m_capturedTexture;
-
             if (m_layout != null)
             {
+                m_layout.SetCapturedTexture(m_capturedTexture);
                 m_layout.SetCapturedAspect((float)frame.Width / frame.Height);
             }
         }
 
-        // Beep plus a short white flash of the captured panel, so the press is clearly acknowledged.
+        // Beep plus a short white flash over the captured image, so the press is clearly acknowledged.
         private void PlayCaptureFeedback()
         {
             if (m_beep != null)
@@ -201,24 +192,10 @@ namespace BoxTagApp
                 m_audio.PlayOneShot(m_beep);
             }
 
-            if (m_capturedScreen != null)
+            if (m_layout != null)
             {
-                if (m_flash != null)
-                {
-                    StopCoroutine(m_flash);
-                }
-                m_flash = StartCoroutine(FlashCapturedPanel());
+                m_layout.FlashCapturedFrame();
             }
-        }
-
-        private IEnumerator FlashCapturedPanel()
-        {
-            Material mat = m_capturedScreen.material;
-            // Unlit/Texture multiplies the texture by _Color, so values above 1 brighten it.
-            mat.color = new Color(2.5f, 2.5f, 2.5f, 1f);
-            yield return new WaitForSeconds(0.15f);
-            mat.color = Color.white;
-            m_flash = null;
         }
 
         // Builds a short sine beep at runtime, so no audio asset is needed in the project.
@@ -241,7 +218,7 @@ namespace BoxTagApp
         {
             if (m_layout != null)
             {
-                m_layout.SetIdText(text);
+                m_layout.SetResults(text);
             }
         }
     }

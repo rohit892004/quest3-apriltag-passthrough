@@ -18,10 +18,7 @@ namespace BoxTagApp
         [Tooltip("MRUK camera component. Must be in this scene (Left eye).")]
         [SerializeField] private PassthroughCameraAccess m_cameraAccess;
 
-        [Tooltip("Quad renderer that displays the camera image.")]
-        [SerializeField] private Renderer m_screen;
-
-        [Tooltip("Layout that sizes and places the panel (set by Setup Scene).")]
+        [Tooltip("Layout that owns the feed panel and shows the camera image on it (set by Setup Scene).")]
         [SerializeField] private BoxTagLayout m_layout;
 
         [Tooltip("Mirror the image horizontally. Turn on if the feed looks mirrored on the headset.")]
@@ -31,35 +28,28 @@ namespace BoxTagApp
         [SerializeField] private bool m_flipY = false;
 
         private Vector2Int m_appliedResolution = Vector2Int.zero;
-
-        private void Awake()
-        {
-            // Create a per-object material instance so the shared asset is not modified.
-            if (m_screen != null)
-            {
-                m_screen.material = new Material(m_screen.sharedMaterial);
-            }
-        }
+        private Texture m_shownTexture;
 
         private void Update()
         {
             // Wait until the camera has permission and is streaming frames.
-            if (m_cameraAccess == null || m_screen == null || !m_cameraAccess.IsPlaying)
+            if (m_cameraAccess == null || m_layout == null || !m_cameraAccess.IsPlaying)
             {
                 return;
             }
 
             // GetTexture() returns the GPU texture that the camera updates every frame.
-            // It is not a CPU copy, so no stall happens here.
+            // It is not a CPU copy, so no stall happens here. The layout shows it in the panel's image.
             Texture cameraTexture = m_cameraAccess.GetTexture();
             if (cameraTexture == null)
             {
                 return;
             }
 
-            if (m_screen.material.mainTexture != cameraTexture)
+            if (m_shownTexture != cameraTexture)
             {
-                m_screen.material.mainTexture = cameraTexture;
+                m_shownTexture = cameraTexture;
+                m_layout.SetFeedTexture(cameraTexture);
             }
 
             // Tell the layout the aspect whenever the camera resolution changes.

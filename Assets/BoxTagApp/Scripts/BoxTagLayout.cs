@@ -1,38 +1,45 @@
 // BoxTagLayout.cs
-// Owns every panel and text size and position. Change the numbers in the Inspector (on the
-// BoxTagLayout object in BoxTagApp.unity); no code change is needed.
+// Owns every panel size, position and text. Each panel is ONE world-space Canvas, built at
+// runtime, with TextMeshPro text and Vertical/Horizontal layout groups. Rows stack, so they
+// cannot overlap. Every value is an Inspector field on the BoxTagLayout object in BoxTagApp.unity.
 //
-// Units are metres. Positions are relative to the user's head at the time of placement.
+// Units:
+//   - Placement (feed width, distance, offsets, gap) is in metres.
+//   - Panel look and text are in millimetres. The canvas scale is 0.001, so 1 canvas unit = 1 mm.
+//     Font sizes are in the same units: title 10, results 18, status 7.
 //
-// Controls:
-//   - Right grip: re-place the panels in front of the current head position.
-//   - Panels are placed automatically once a head pose exists.
+// Feed panel (top -> bottom):
+//   "Live camera" title -> camera image (4:3) -> status row ("DB: ..." left, "Build ..." right).
+// Captured panel (top -> bottom):
+//   "Captured frame" title -> captured image (4:3) -> results list, one line per tag
+//   ("ID 1 -> Box no 1"), at most MaxResultLines lines. Its top edge stays level with the feed's
+//   top edge, so the list grows downward.
 //
-// Panel rules:
-//   - Live feed: width FeedWidthMeters, height from the 4:3 image aspect, placed FeedDistanceMeters
-//     straight ahead, FeedHeightOffsetMeters from eye level (negative = lower), tilted by
-//     FeedTiltDegrees so the top leans toward the user.
-//   - Captured frame: width CapturedWidthMeters, height from its aspect, to the right of the feed
-//     with GapMeters between their edges. Centred vertically on the feed (a 4:3 frame at 0.30 m
-//     wide is 0.225 m tall, so it cannot match the feed's height without distortion).
-//   - Title above the captured frame; detected IDs below it.
-//   - Build label bottom-right of the feed; database status bottom-left of the feed.
+// Text never leaves its row: each row is one line and is cut with an ellipsis when too long.
+// Panels have a semi-transparent dark background with padding behind the content.
 //
-// Text sizing: each TextMesh is scaled so its measured rendered height matches the Inspector
-// value, and its width never exceeds the panel's width. Measurement happens one frame after the
-// text changes, because TextMesh regenerates its mesh lazily. The result is logged as
-// "[BoxTag] text ... rendered size", so the scale can be checked against the log.
+// Placement: the feed is placed once a head pose exists, straight ahead of the head at
+// FeedDistanceMeters. The captured panel is placed to its right, with GapMeters between them.
+//
+// Controls: right grip re-places the panels in front of the head.
+//
+// Fonts: TextMeshPro needs its "TMP Essentials" import once per project
+// (Window > TextMeshPro > Import TMP Essentials). Without it, no text is drawn and an error is logged.
 
 using System.Collections;
-using System.Collections.Generic;
+using TMPro;
 using UnityEngine;
+using UnityEngine.UI;
 
 namespace BoxTagApp
 {
     public class BoxTagLayout : MonoBehaviour
     {
-        [Header("Live feed panel")]
-        [Tooltip("Width of the live feed panel in metres (height follows the 4:3 image aspect).")]
+        private const float MmToMetres = 0.001f;
+        private const float DefaultAspect = 4f / 3f;
+
+        [Header("Placement (metres)")]
+        [Tooltip("Width of the live feed panel in metres. Its height follows the content.")]
         [SerializeField] private float m_feedWidthMeters = 0.45f;
 
         [Tooltip("Distance in metres from the head to the feed panel, measured straight ahead.")]
@@ -44,65 +51,103 @@ namespace BoxTagApp
         [Tooltip("Tilt in degrees. Positive values lean the top of the panel toward the user.")]
         [SerializeField] private float m_feedTiltDegrees = 10f;
 
-        [Header("Captured frame panel")]
-        [Tooltip("Width of the captured-frame panel in metres (height follows its aspect).")]
+        [Tooltip("Width of the captured-frame panel in metres. Its height follows the content.")]
         [SerializeField] private float m_capturedWidthMeters = 0.30f;
 
         [Tooltip("Gap in metres between the feed panel's right edge and the captured panel's left edge.")]
         [SerializeField] private float m_gapMeters = 0.05f;
 
-        [Header("Text heights (metres, rendered)")]
-        [Tooltip("Height of the \"Captured frame\" title.")]
-        [SerializeField] private float m_titleHeightMeters = 0.01f;
+        [Header("Panel look (mm)")]
+        [Tooltip("Padding in whole mm between each panel's edge and its content. The background covers it.")]
+        [SerializeField] private int m_panelPaddingMm = 8;
 
-        [Tooltip("Height of each line of detected-ID text.")]
-        [SerializeField] private float m_idLineHeightMeters = 0.02f;
+        [Tooltip("Vertical space in mm between rows (title, image, status or results).")]
+        [SerializeField] private float m_rowSpacingMm = 4f;
 
-        [Tooltip("Height of the small build label (bottom-right of the feed).")]
-        [SerializeField] private float m_buildHeightMeters = 0.006f;
+        [Tooltip("Panel background colour. Alpha 0.6 = 60% opaque black.")]
+        [SerializeField] private Color m_backgroundColor = new Color(0f, 0f, 0f, 0.6f);
 
-        [Tooltip("Height of the database status line (bottom-left of the feed).")]
-        [SerializeField] private float m_databaseHeightMeters = 0.008f;
+        [Tooltip("Text colour for all panels.")]
+        [SerializeField] private Color m_textColor = Color.white;
 
-        [Header("Panels and text (wired by Setup Scene)")]
+        [Header("Text (font size in mm)")]
+        [Tooltip("Title size: \"Live camera\" and \"Captured frame\".")]
+        [SerializeField] private float m_titleFontSize = 10f;
+
+        [Tooltip("Results size: one line per detected tag.")]
+        [SerializeField] private float m_resultFontSize = 18f;
+
+        [Tooltip("Status size: \"DB: ...\" and \"Build ...\".")]
+        [SerializeField] private float m_statusFontSize = 7f;
+
+        [Tooltip("Most result lines shown. If there are more tags, the last line says \"+N more\".")]
+        [SerializeField] private int m_maxResultLines = 5;
+
+        [Tooltip("Row height = font size x this factor. Leaves room for descenders so they are not clipped.")]
+        [SerializeField] private float m_rowHeightFactor = 1.3f;
+
+        [Tooltip("Vertical space in mm between result lines.")]
+        [SerializeField] private float m_resultSpacingMm = 2f;
+
+        [Header("Legacy scene objects (replaced by the canvases; hidden at start)")]
+        [Tooltip("Old feed quad. Hidden, not deleted, so the scene reference stays valid.")]
         [SerializeField] private Transform m_feedPanel;
+
+        [Tooltip("Old captured-frame quad. Hidden at start.")]
         [SerializeField] private Transform m_capturedPanel;
+
+        [Tooltip("Old title TextMesh. Hidden at start.")]
         [SerializeField] private TextMesh m_titleText;
+
+        [Tooltip("Old result TextMesh. Hidden at start.")]
         [SerializeField] private TextMesh m_idText;
 
-        private TextMesh m_buildText;
-        private TextMesh m_databaseText;
-        private float m_feedAspect = 4f / 3f;
-        private float m_capturedAspect = 4f / 3f;
-        private bool m_feedFlipX;
-        private bool m_feedFlipY;
+        private RectTransform m_feedRoot;
+        private RectTransform m_capturedRoot;
+        private RawImage m_feedImage;
+        private RawImage m_capturedImage;
+        private LayoutElement m_feedImageSlot;
+        private LayoutElement m_capturedImageSlot;
+        private Image m_flashOverlay;
+        private TMP_Text m_databaseText;
+        private TMP_Text m_buildText;
+        private TMP_Text[] m_resultRows;
+
+        private float m_feedAspect = DefaultAspect;
+        private float m_capturedAspect = DefaultAspect;
         private bool m_placed;
-        private readonly Dictionary<TextMesh, Coroutine> m_fitRoutines = new Dictionary<TextMesh, Coroutine>();
+        private bool m_sizeLogged;
+        private Coroutine m_flashRoutine;
 
         private void Awake()
         {
-            // Starting sizes (4:3) so the panels are not 1 m quads before the camera starts.
-            if (m_feedPanel != null)
+            HideLegacyObjects();
+
+            if (TMP_Settings.defaultFontAsset == null)
             {
-                ApplyScale(m_feedPanel, m_feedWidthMeters, m_feedAspect, false, false);
-            }
-            if (m_capturedPanel != null)
-            {
-                ApplyScale(m_capturedPanel, m_capturedWidthMeters, m_capturedAspect, false, false);
+                Debug.LogError("[BoxTag] No TMP default font. In the Editor: Window > TextMeshPro > " +
+                               "Import TMP Essentials, then rebuild. Text will not show until then.");
             }
 
-            m_buildText = CreateLabel("BoxTagBuildLabel", TextAnchor.LowerRight, TextAlignment.Right,
-                new Color(1f, 1f, 1f, 0.6f));
-            m_buildText.text = "build " + Application.version;
+            // Feed panel: title, camera image, status row.
+            m_feedRoot = CreateRoot("BoxTagFeedPanel", m_feedWidthMeters * 1000f);
+            AddText(m_feedRoot, "FeedTitle", m_titleFontSize, TextAlignmentOptions.Left).text = "Live camera";
+            m_feedImage = AddImageRow(m_feedRoot, "FeedImage", out m_feedImageSlot, out _);
+            AddStatusRow(m_feedRoot);
 
-            m_databaseText = CreateLabel("BoxTagDatabaseStatus", TextAnchor.LowerLeft, TextAlignment.Left,
-                new Color(1f, 1f, 1f, 0.8f));
-            m_databaseText.text = "DB: starting";
+            // Captured panel: title, captured image (with flash overlay), results list.
+            m_capturedRoot = CreateRoot("BoxTagCapturedPanel", m_capturedWidthMeters * 1000f);
+            AddText(m_capturedRoot, "CapturedTitle", m_titleFontSize, TextAlignmentOptions.Left).text = "Captured frame";
+            m_capturedImage = AddImageRow(m_capturedRoot, "CapturedImage", out m_capturedImageSlot, out m_flashOverlay);
+            AddResultRows(m_capturedRoot);
 
-            FitWhenReady(m_buildText, m_buildHeightMeters, 1, FeedWidth * 0.4f);
-            FitWhenReady(m_databaseText, m_databaseHeightMeters, 1, FeedWidth * 0.6f);
-            FitWhenReady(m_titleText, m_titleHeightMeters, 1, CapturedWidth);
-            FitWhenReady(m_idText, m_idLineHeightMeters, 1, CapturedWidth);
+            ApplyImageHeight(m_feedImageSlot, m_feedRoot, m_feedAspect);
+            ApplyImageHeight(m_capturedImageSlot, m_capturedRoot, m_capturedAspect);
+
+            m_buildText.text = "Build " + Application.version;
+            SetDatabaseStatus("DB: starting");
+            SetResults("Press A or right trigger to capture");
+            LayoutRest();
         }
 
         private void Update()
@@ -121,58 +166,105 @@ namespace BoxTagApp
             }
         }
 
-        /// <summary>Sets the live feed's aspect and flips, then sizes the panel.</summary>
+        /// <summary>Sets the live feed's image, aspect and flips. The height follows the aspect.</summary>
         public void SetFeedAspect(float aspect, bool flipX, bool flipY)
         {
             m_feedAspect = Valid(aspect, m_feedAspect);
-            m_feedFlipX = flipX;
-            m_feedFlipY = flipY;
-            if (m_feedPanel != null)
+            if (m_feedImage != null)
             {
-                ApplyScale(m_feedPanel, m_feedWidthMeters, m_feedAspect, m_feedFlipX, m_feedFlipY);
+                // Flips are UV flips on the RawImage. They look the same as the old negative scale.
+                m_feedImage.uvRect = new Rect(flipX ? 1f : 0f, flipY ? 1f : 0f, flipX ? -1f : 1f, flipY ? -1f : 1f);
             }
+            ApplyImageHeight(m_feedImageSlot, m_feedRoot, m_feedAspect);
             LayoutRest();
         }
 
-        /// <summary>Sets the captured frame's aspect and sizes its panel.</summary>
+        /// <summary>Sets the captured frame's aspect. The height follows the aspect.</summary>
         public void SetCapturedAspect(float aspect)
         {
             m_capturedAspect = Valid(aspect, m_capturedAspect);
-            if (m_capturedPanel != null)
-            {
-                ApplyScale(m_capturedPanel, m_capturedWidthMeters, m_capturedAspect, false, false);
-            }
+            ApplyImageHeight(m_capturedImageSlot, m_capturedRoot, m_capturedAspect);
             LayoutRest();
         }
 
-        /// <summary>Sets the detected-ID text. Each line gets the Inspector height and stays within the panel width.</summary>
-        public void SetIdText(string text)
+        /// <summary>Sets the live camera image.</summary>
+        public void SetFeedTexture(Texture texture)
         {
-            if (m_idText == null)
+            if (m_feedImage != null)
+            {
+                m_feedImage.texture = texture;
+            }
+        }
+
+        /// <summary>Sets the captured frame image.</summary>
+        public void SetCapturedTexture(Texture texture)
+        {
+            if (m_capturedImage != null)
+            {
+                m_capturedImage.texture = texture;
+            }
+        }
+
+        /// <summary>
+        /// Sets the results list. Each line is one row, cut with an ellipsis if it is too long.
+        /// More than MaxResultLines lines: the last row says "+N more".
+        /// </summary>
+        public void SetResults(string text)
+        {
+            if (m_resultRows == null)
             {
                 return;
             }
-            m_idText.text = text;
-            int lines = text.Split('\n').Length;
-            FitWhenReady(m_idText, m_idLineHeightMeters, lines, CapturedWidth);
+
+            string[] lines = (text ?? string.Empty).Split('\n');
+            int max = m_resultRows.Length;
+            bool overflow = lines.Length > max;
+
+            for (int i = 0; i < max; i++)
+            {
+                if (i >= lines.Length)
+                {
+                    m_resultRows[i].gameObject.SetActive(false);
+                    continue;
+                }
+
+                m_resultRows[i].gameObject.SetActive(true);
+                m_resultRows[i].text = overflow && i == max - 1
+                    ? "+" + (lines.Length - (max - 1)) + " more"
+                    : lines[i];
+            }
+
+            LayoutRest();
         }
 
         /// <summary>Sets the database status line (bottom-left of the feed).</summary>
         public void SetDatabaseStatus(string text)
         {
-            if (m_databaseText == null)
+            if (m_databaseText != null)
+            {
+                m_databaseText.text = text;
+            }
+        }
+
+        /// <summary>Short white flash over the captured image, so a press is clearly acknowledged.</summary>
+        public void FlashCapturedFrame()
+        {
+            if (m_flashOverlay == null || !isActiveAndEnabled)
             {
                 return;
             }
-            m_databaseText.text = text;
-            FitWhenReady(m_databaseText, m_databaseHeightMeters, 1, FeedWidth * 0.6f);
+            if (m_flashRoutine != null)
+            {
+                StopCoroutine(m_flashRoutine);
+            }
+            m_flashRoutine = StartCoroutine(FlashRoutine());
         }
 
-        /// <summary>Places the feed in front of the head, then lays out everything else.</summary>
+        /// <summary>Places the feed in front of the head, then lays out the captured panel.</summary>
         public void PlaceAll()
         {
             Transform head = Camera.main != null ? Camera.main.transform : null;
-            if (head == null || m_feedPanel == null)
+            if (head == null || m_feedRoot == null)
             {
                 return;
             }
@@ -187,157 +279,235 @@ namespace BoxTagApp
 
             Vector3 position = head.position + forward * m_feedDistanceMeters + Vector3.up * m_feedHeightOffsetMeters;
 
-            // A quad's visible side faces its local -Z, so point -Z at the head.
-            // Then tilt the top toward the user (rotation about local X).
+            // A canvas faces its local -Z, so point -Z at the head. Then tilt the top toward the user.
             Quaternion facing = Quaternion.LookRotation(position - head.position);
             Quaternion tilt = Quaternion.Euler(-m_feedTiltDegrees, 0f, 0f);
-            m_feedPanel.SetPositionAndRotation(position, facing * tilt);
+            m_feedRoot.SetPositionAndRotation(position, facing * tilt);
+
+            // World-space canvases need a camera for sorting and culling.
+            m_feedRoot.GetComponent<Canvas>().worldCamera = Camera.main;
+            if (m_capturedRoot != null)
+            {
+                m_capturedRoot.GetComponent<Canvas>().worldCamera = Camera.main;
+            }
 
             m_placed = true;
             LayoutRest();
         }
 
-        private float FeedWidth => Mathf.Abs(m_feedPanel != null ? m_feedPanel.localScale.x : m_feedWidthMeters);
-        private float CapturedWidth => m_capturedWidthMeters * 0.95f;
-
-        // Positions the captured panel, title, ID text and corner labels relative to the feed.
+        // Positions the captured panel to the right of the feed, top edges level. Forces the layout
+        // first, so the panel sizes are the real ones.
         private void LayoutRest()
         {
-            if (m_feedPanel == null)
+            if (m_feedRoot == null)
             {
                 return;
             }
 
-            Transform feed = m_feedPanel;
-            float feedHalfW = Mathf.Abs(feed.localScale.x) * 0.5f;
-            float feedHalfH = Mathf.Abs(feed.localScale.y) * 0.5f;
+            LayoutRebuilder.ForceRebuildLayoutImmediate(m_feedRoot);
+            Transform feed = m_feedRoot;
+            float feedHalfW = m_feedRoot.rect.width * MmToMetres * 0.5f;
+            float feedHalfH = m_feedRoot.rect.height * MmToMetres * 0.5f;
 
-            if (m_capturedPanel != null)
+            if (m_capturedRoot != null)
             {
-                float capHalfH = Mathf.Abs(m_capturedPanel.localScale.y) * 0.5f;
-                float capHalfW = Mathf.Abs(m_capturedPanel.localScale.x) * 0.5f;
+                LayoutRebuilder.ForceRebuildLayoutImmediate(m_capturedRoot);
+                float capHalfW = m_capturedRoot.rect.width * MmToMetres * 0.5f;
+                float capHalfH = m_capturedRoot.rect.height * MmToMetres * 0.5f;
 
-                // Right of the feed, same vertical centre, same tilt.
-                Vector3 capPos = feed.position + feed.right * (feedHalfW + m_gapMeters + capHalfW);
-                m_capturedPanel.SetPositionAndRotation(capPos, feed.rotation);
-
-                if (m_titleText != null)
-                {
-                    m_titleText.transform.SetPositionAndRotation(
-                        capPos + feed.up * (capHalfH + 0.01f), feed.rotation);
-                }
-
-                if (m_idText != null)
-                {
-                    m_idText.transform.SetPositionAndRotation(
-                        capPos - feed.up * (capHalfH + 0.01f), feed.rotation);
-                }
+                // Right of the feed, top edges level, so the results list grows downward.
+                Vector3 capPos = feed.position
+                                 + feed.right * (feedHalfW + m_gapMeters + capHalfW)
+                                 + feed.up * (feedHalfH - capHalfH);
+                m_capturedRoot.SetPositionAndRotation(capPos, feed.rotation);
             }
 
-            // Corner labels: just inside the feed's bottom corners, slightly toward the user.
-            Vector3 toUser = -feed.forward * 0.005f;
-            if (m_buildText != null)
+            if (!m_sizeLogged && m_placed)
             {
-                Vector3 corner = feed.position + feed.right * (feedHalfW - 0.01f) + feed.up * (-feedHalfH + 0.01f) + toUser;
-                m_buildText.transform.SetPositionAndRotation(corner, feed.rotation);
-            }
-            if (m_databaseText != null)
-            {
-                Vector3 corner = feed.position - feed.right * (feedHalfW - 0.01f) + feed.up * (-feedHalfH + 0.01f) + toUser;
-                m_databaseText.transform.SetPositionAndRotation(corner, feed.rotation);
+                m_sizeLogged = true;
+                Debug.Log("[BoxTag] panel size mm: feed " + m_feedRoot.rect.width.ToString("F0") + "x" +
+                          m_feedRoot.rect.height.ToString("F0") + ", captured " +
+                          (m_capturedRoot != null ? m_capturedRoot.rect.width.ToString("F0") + "x" +
+                                                    m_capturedRoot.rect.height.ToString("F0") : "none") +
+                          " (1 unit = 1 mm)");
             }
         }
 
-        private TextMesh CreateLabel(string name, TextAnchor anchor, TextAlignment alignment, Color color)
+        // ---- Canvas construction -------------------------------------------------------------
+
+        // One world-space canvas: background, padding, vertical rows, height fits its content.
+        private RectTransform CreateRoot(string name, float widthMm)
         {
-            var go = new GameObject(name);
-            var text = go.AddComponent<TextMesh>();
-            text.characterSize = 0.01f;
-            text.fontSize = 100;
-            text.anchor = anchor;
+            var go = new GameObject(name, typeof(RectTransform));
+            go.transform.SetParent(transform, false);
+
+            var canvas = go.AddComponent<Canvas>();
+            canvas.renderMode = RenderMode.WorldSpace;
+
+            var rect = (RectTransform)go.transform;
+            rect.sizeDelta = new Vector2(widthMm, 0f);
+            rect.localScale = Vector3.one * MmToMetres; // 1 canvas unit = 1 mm
+
+            var background = go.AddComponent<Image>();
+            background.color = m_backgroundColor;
+            background.raycastTarget = false;
+
+            var group = go.AddComponent<VerticalLayoutGroup>();
+            int pad = m_panelPaddingMm;
+            group.padding = new RectOffset(pad, pad, pad, pad);
+            group.spacing = m_rowSpacingMm;
+            group.childAlignment = TextAnchor.UpperLeft;
+            group.childControlWidth = true;
+            group.childControlHeight = true;
+            group.childForceExpandWidth = true;
+            group.childForceExpandHeight = false;
+
+            var fitter = go.AddComponent<ContentSizeFitter>();
+            fitter.horizontalFit = ContentSizeFitter.FitMode.Unconstrained;
+            fitter.verticalFit = ContentSizeFitter.FitMode.PreferredSize;
+
+            return rect;
+        }
+
+        // One line of TMP text in a fixed-height row. It takes the row's full width and never
+        // wraps; too-long text is cut with an ellipsis.
+        private TMP_Text AddText(Transform parent, string name, float fontSize, TextAlignmentOptions alignment)
+        {
+            var go = new GameObject(name, typeof(RectTransform));
+            go.transform.SetParent(parent, false);
+
+            var text = go.AddComponent<TextMeshProUGUI>();
+            text.fontSize = fontSize;
+            text.color = m_textColor;
             text.alignment = alignment;
-            text.color = color;
+            text.enableWordWrapping = false;
+            text.overflowMode = TextOverflowModes.Ellipsis;
+            text.raycastTarget = false;
+            text.text = string.Empty;
+
+            float height = fontSize * m_rowHeightFactor;
+            var element = go.AddComponent<LayoutElement>();
+            element.minWidth = 0f;
+            element.preferredWidth = 0f;
+            element.flexibleWidth = 1f;
+            element.minHeight = height;
+            element.preferredHeight = height;
             return text;
         }
 
-        // Scales a panel quad: width from the setting, height from the aspect, flips via negative scale.
-        private static void ApplyScale(Transform panel, float width, float aspect, bool flipX, bool flipY)
+        // Camera image row (full width). The overlay is the capture flash, drawn over the image.
+        private RawImage AddImageRow(RectTransform root, string name, out LayoutElement slot, out Image flash)
         {
-            float height = width / aspect;
-            panel.localScale = new Vector3(
-                width * (flipX ? -1f : 1f),
-                height * (flipY ? -1f : 1f),
-                1f);
+            var row = new GameObject(name, typeof(RectTransform));
+            row.transform.SetParent(root, false);
+            slot = row.AddComponent<LayoutElement>();
+            slot.minWidth = 0f;
+            slot.preferredWidth = 0f;
+            slot.flexibleWidth = 1f;
+
+            var imageGo = new GameObject("Image", typeof(RectTransform));
+            imageGo.transform.SetParent(row.transform, false);
+            StretchToParent(imageGo);
+            var raw = imageGo.AddComponent<RawImage>();
+            raw.raycastTarget = false;
+
+            var flashGo = new GameObject("Flash", typeof(RectTransform));
+            flashGo.transform.SetParent(row.transform, false);
+            StretchToParent(flashGo);
+            flashGo.AddComponent<LayoutElement>().ignoreLayout = true;
+            flash = flashGo.AddComponent<Image>();
+            flash.color = new Color(1f, 1f, 1f, 0f);
+            flash.raycastTarget = false;
+
+            return raw;
         }
 
-        // Starts a fit on the next frame (after TextMesh regenerates its mesh), replacing any pending fit.
-        private void FitWhenReady(TextMesh text, float lineHeight, int lines, float maxWidth)
+        // Feed status row: "DB: ..." on the left, "Build ..." on the right. Each half is cut with an ellipsis.
+        private void AddStatusRow(RectTransform root)
         {
-            if (text == null || !isActiveAndEnabled)
+            var row = new GameObject("StatusRow", typeof(RectTransform));
+            row.transform.SetParent(root, false);
+
+            var group = row.AddComponent<HorizontalLayoutGroup>();
+            group.childControlWidth = true;
+            group.childControlHeight = true;
+            group.childForceExpandWidth = false;
+            group.childForceExpandHeight = false;
+
+            float height = m_statusFontSize * m_rowHeightFactor;
+            var element = row.AddComponent<LayoutElement>();
+            element.flexibleWidth = 1f;
+            element.minHeight = height;
+            element.preferredHeight = height;
+
+            m_databaseText = AddText(row.transform, "DatabaseStatus", m_statusFontSize, TextAlignmentOptions.Left);
+            m_buildText = AddText(row.transform, "BuildLabel", m_statusFontSize, TextAlignmentOptions.Right);
+        }
+
+        // Results list: a vertical group of one-line rows. Unused rows are inactive, so they take no space.
+        private void AddResultRows(RectTransform root)
+        {
+            var container = new GameObject("Results", typeof(RectTransform));
+            container.transform.SetParent(root, false);
+
+            var group = container.AddComponent<VerticalLayoutGroup>();
+            group.spacing = m_resultSpacingMm;
+            group.childAlignment = TextAnchor.UpperLeft;
+            group.childControlWidth = true;
+            group.childControlHeight = true;
+            group.childForceExpandWidth = true;
+            group.childForceExpandHeight = false;
+
+            var element = container.AddComponent<LayoutElement>();
+            element.minWidth = 0f;
+            element.preferredWidth = 0f;
+            element.flexibleWidth = 1f;
+
+            int count = Mathf.Max(1, m_maxResultLines);
+            m_resultRows = new TMP_Text[count];
+            for (int i = 0; i < count; i++)
+            {
+                m_resultRows[i] = AddText(container.transform, "Result" + i, m_resultFontSize, TextAlignmentOptions.Left);
+            }
+        }
+
+        // Image height = the panel's inner width / aspect.
+        private void ApplyImageHeight(LayoutElement slot, RectTransform root, float aspect)
+        {
+            if (slot == null || root == null)
             {
                 return;
             }
-            if (m_fitRoutines.TryGetValue(text, out Coroutine running) && running != null)
-            {
-                StopCoroutine(running);
-            }
-            m_fitRoutines[text] = StartCoroutine(FitRoutine(text, lineHeight, lines, maxWidth));
+            float innerWidth = root.sizeDelta.x - 2f * m_panelPaddingMm;
+            slot.minHeight = innerWidth / aspect;
+            slot.preferredHeight = innerWidth / aspect;
         }
 
-        private IEnumerator FitRoutine(TextMesh text, float lineHeight, int lines, float maxWidth)
+        private IEnumerator FlashRoutine()
         {
-            // Reset to the unit scale and wait a frame, so the measured mesh is the real text mesh.
-            text.transform.localScale = Vector3.one;
-            for (int attempt = 0; attempt < 10; attempt++)
-            {
-                yield return null;
-
-                if (TryMeasureUnscaled(text, out Vector2 size))
-                {
-                    float targetHeight = lineHeight * lines;
-                    float scale = targetHeight / size.y;
-                    if (maxWidth > 0f && size.x * scale > maxWidth)
-                    {
-                        scale = maxWidth / size.x; // shrink to fit the panel width, never overflow
-                    }
-                    text.transform.localScale = Vector3.one * scale;
-
-                    Debug.Log("[BoxTag] text '" + Preview(text.text) + "' rendered size: height=" +
-                              (size.y * scale).ToString("F4") + " m, width=" + (size.x * scale).ToString("F4") +
-                              " m (target height " + targetHeight.ToString("F4") + " m, max width " +
-                              maxWidth.ToString("F3") + " m, scale " + scale.ToString("F5") + ")");
-                    yield break;
-                }
-            }
-            Debug.LogWarning("[BoxTag] text '" + Preview(text.text) + "' could not be measured; left at unit scale.");
+            m_flashOverlay.color = new Color(1f, 1f, 1f, 0.8f);
+            yield return new WaitForSeconds(0.15f);
+            m_flashOverlay.color = new Color(1f, 1f, 1f, 0f);
+            m_flashRoutine = null;
         }
 
-        // Unscaled rendered size of the text mesh (local units; the text is scaled by its transform).
-        private static bool TryMeasureUnscaled(TextMesh text, out Vector2 size)
+        private void HideLegacyObjects()
         {
-            size = Vector2.zero;
-            MeshFilter filter = text.GetComponent<MeshFilter>();
-            if (filter == null || filter.sharedMesh == null)
-            {
-                return false;
-            }
-            Bounds b = filter.sharedMesh.bounds;
-            if (b.size.x <= 0f || b.size.y <= 0f)
-            {
-                return false;
-            }
-            size = new Vector2(b.size.x, b.size.y);
-            return true;
+            // The old quads and TextMesh text are replaced by the canvases. They are hidden, not
+            // deleted, so the scene references stay valid.
+            if (m_feedPanel != null) m_feedPanel.gameObject.SetActive(false);
+            if (m_capturedPanel != null) m_capturedPanel.gameObject.SetActive(false);
+            if (m_titleText != null) m_titleText.gameObject.SetActive(false);
+            if (m_idText != null) m_idText.gameObject.SetActive(false);
         }
 
-        private static string Preview(string s)
+        private static void StretchToParent(GameObject go)
         {
-            if (string.IsNullOrEmpty(s))
-            {
-                return "";
-            }
-            string oneLine = s.Replace("\n", " | ");
-            return oneLine.Length > 24 ? oneLine.Substring(0, 24) + "..." : oneLine;
+            var rect = (RectTransform)go.transform;
+            rect.anchorMin = Vector2.zero;
+            rect.anchorMax = Vector2.one;
+            rect.offsetMin = Vector2.zero;
+            rect.offsetMax = Vector2.zero;
         }
 
         private static float Valid(float aspect, float fallback)

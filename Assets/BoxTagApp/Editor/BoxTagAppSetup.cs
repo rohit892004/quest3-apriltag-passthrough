@@ -19,7 +19,6 @@ public static class BoxTagAppSetup
 {
     private const string Root = "Assets/BoxTagApp";
     private const string ScenePath = Root + "/Scene/BoxTagApp.unity";
-    private const string MaterialPath = Root + "/Materials/BoxTagCameraFeed.mat";
 
     // Prefab from the sample project that already contains the MRUK PassthroughCameraAccess component.
     private const string CameraPrefabPath =
@@ -46,32 +45,20 @@ public static class BoxTagAppSetup
         // The ONE camera owner in this scene: MRUK PassthroughCameraAccess.
         PassthroughCameraAccess cameraAccess = CreateCameraAccess();
 
-        // World-space panel that shows the feed.
-        Renderer screen = CreateFeedPanel();
-
-        // Feed controller: wires the camera access and the panel together.
-        // Layout: owns every panel and text size/position (Inspector values on this object).
+        // Layout: owns every panel (world-space canvases built at runtime) and its text sizes.
+        // Values are Inspector fields on this object.
         var layoutGo = new GameObject("BoxTagLayout");
         var layout = layoutGo.AddComponent<BoxTagLayout>();
 
+        // Feed controller: wires the camera access and the layout together.
         var feedGo = new GameObject("BoxTagCameraFeed");
         var feed = feedGo.AddComponent<BoxTagCameraFeed>();
         SetPrivate(feed, "m_cameraAccess", cameraAccess);
-        SetPrivate(feed, "m_screen", screen);
         SetPrivate(feed, "m_layout", layout);
 
         // L2: detector (worker-thread AprilTag tag36h11) and capture controller.
         var detectorGo = new GameObject("BoxTagDetector");
         var detector = detectorGo.AddComponent<BoxTagDetector>();
-
-        Renderer capturedScreen = CreatePanel("CapturedFramePanel");
-        TextMesh titleText = CreateText("CapturedFrameTitle", "Captured frame", 0.02f, 72, TextAnchor.LowerCenter);
-        TextMesh resultText = CreateText("CaptureResultText", "Press A or right trigger to capture", 0.04f, 110, TextAnchor.UpperCenter);
-
-        SetPrivate(layout, "m_feedPanel", screen.transform);
-        SetPrivate(layout, "m_capturedPanel", capturedScreen.transform);
-        SetPrivate(layout, "m_titleText", titleText);
-        SetPrivate(layout, "m_idText", resultText);
 
         // L3: tag ID -> label database (settings asset is created once and kept on later runs).
         var databaseGo = new GameObject("BoxTagDatabase");
@@ -85,7 +72,6 @@ public static class BoxTagAppSetup
         SetPrivate(capture, "m_detector", detector);
         SetPrivate(capture, "m_database", database);
         SetPrivate(capture, "m_layout", layout);
-        SetPrivate(capture, "m_capturedScreen", capturedScreen);
 
         EnsureFolder(Root + "/Scene");
         // Passthrough: applied after all objects exist so it also covers the rig's cameras.
@@ -230,52 +216,6 @@ public static class BoxTagAppSetup
                          ". Creating a bare PassthroughCameraAccess.");
         var go = new GameObject("PassthroughCameraAccess");
         return go.AddComponent<PassthroughCameraAccess>();
-    }
-
-    private static Renderer CreateFeedPanel()
-    {
-        return CreatePanel("CameraFeedPanel");
-    }
-
-    // A unit quad that shows a texture. The scripts position and scale it at runtime.
-    private static Renderer CreatePanel(string name)
-    {
-        GameObject quad = GameObject.CreatePrimitive(PrimitiveType.Quad);
-        quad.name = name;
-        // The panel is positioned by the script at runtime; no collider is needed.
-        Object.DestroyImmediate(quad.GetComponent<MeshCollider>());
-
-        Material material = GetOrCreateMaterial();
-        Renderer renderer = quad.GetComponent<Renderer>();
-        renderer.sharedMaterial = material;
-        return renderer;
-    }
-
-    // Text object for the captured-frame title and the detected IDs. Positioned by BoxTagCapture.
-    private static TextMesh CreateText(string name, string content, float characterSize, int fontSize, TextAnchor anchor)
-    {
-        var go = new GameObject(name);
-        var text = go.AddComponent<TextMesh>();
-        text.text = content;
-        text.characterSize = characterSize;
-        text.fontSize = fontSize;
-        text.anchor = anchor;
-        text.alignment = TextAlignment.Center;
-        text.color = Color.white;
-        return text;
-    }
-
-    private static Material GetOrCreateMaterial()
-    {
-        var existing = AssetDatabase.LoadAssetAtPath<Material>(MaterialPath);
-        if (existing != null)
-        {
-            return existing;
-        }
-        Shader shader = Shader.Find("Unlit/Texture");
-        var material = new Material(shader) { name = "BoxTagCameraFeed" };
-        AssetDatabase.CreateAsset(material, MaterialPath);
-        return material;
     }
 
     // Sets a private serialized field. Needed because the feed script's fields are private.
