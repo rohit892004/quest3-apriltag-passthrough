@@ -38,8 +38,81 @@ public static class BoxTagAppBuild
         EditorApplication.Exit(ok ? 0 : 1);
     }
 
+    // Debug materials for BoxTagLabels (loaded with Resources.Load at runtime; Shader.Find is not used there).
+    private const string DebugMaterialFolder = "Assets/BoxTagApp/Resources";
+    private const string DebugShaderName = "Unlit/Color"; // Built-in render pipeline (the project has no URP)
+
+    private static readonly (string name, Color color)[] DebugMaterials =
+    {
+        ("BoxTagDebugRed", Color.red),
+        ("BoxTagDebugGreen", Color.green),
+        ("BoxTagDebugBlue", new Color(0.3f, 0.5f, 1f)),
+        ("BoxTagDebugWhite", Color.white),
+    };
+
+    // Creates or updates the debug materials, and puts their shader in Always Included Shaders,
+    // so the build cannot strip it (a stripped shader shows as pink).
+    private static bool EnsureDebugMaterials()
+    {
+        Shader shader = Shader.Find(DebugShaderName);
+        if (shader == null)
+        {
+            Debug.LogError("[BoxTagAppBuild] FAILED: shader '" + DebugShaderName + "' not found.");
+            return false;
+        }
+
+        // Always Included Shaders lives in ProjectSettings/GraphicsSettings.asset.
+        Object[] graphicsAssets = AssetDatabase.LoadAllAssetsAtPath("ProjectSettings/GraphicsSettings.asset");
+        if (graphicsAssets.Length == 0)
+        {
+            Debug.LogError("[BoxTagAppBuild] FAILED: ProjectSettings/GraphicsSettings.asset not found.");
+            return false;
+        }
+        var so = new SerializedObject(graphicsAssets[0]);
+        SerializedProperty included = so.FindProperty("m_AlwaysIncludedShaders");
+        bool present = false;
+        for (int i = 0; i < included.arraySize; i++)
+        {
+            if (included.GetArrayElementAtIndex(i).objectReferenceValue == shader)
+            {
+                present = true;
+                break;
+            }
+        }
+        if (!present)
+        {
+            included.InsertArrayElementAtIndex(included.arraySize);
+            included.GetArrayElementAtIndex(included.arraySize - 1).objectReferenceValue = shader;
+            so.ApplyModifiedPropertiesWithoutUndo();
+            Debug.Log("[BoxTagAppBuild] Added " + DebugShaderName + " to Always Included Shaders.");
+        }
+
+        Directory.CreateDirectory(DebugMaterialFolder);
+        foreach (var (name, color) in DebugMaterials)
+        {
+            string path = DebugMaterialFolder + "/" + name + ".mat";
+            Material material = AssetDatabase.LoadAssetAtPath<Material>(path);
+            if (material == null)
+            {
+                material = new Material(shader) { name = name };
+                AssetDatabase.CreateAsset(material, path);
+            }
+            material.shader = shader;
+            material.color = color;
+            EditorUtility.SetDirty(material);
+        }
+        AssetDatabase.SaveAssets();
+        AssetDatabase.Refresh();
+        return true;
+    }
+
     private static bool Build()
     {
+        if (!EnsureDebugMaterials())
+        {
+            return false;
+        }
+
         // Safety check: the APK must contain exactly one enabled scene, BoxTagApp.
         // The FRC StartScene and the sample scenes are disabled in Build Settings.
         string[] enabledScenes = EditorBuildSettings.scenes
