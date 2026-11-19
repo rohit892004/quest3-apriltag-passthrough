@@ -5,21 +5,26 @@
 // Units are metres. Positions are relative to the user's head at the time of placement.
 //
 // Controls:
-//   - Right grip (hold/press): re-place the panels in front of the current head position.
+//   - Right grip: re-place the panels in front of the current head position.
 //   - Panels are placed automatically once a head pose exists.
 //
 // Panel rules:
-//   - Live feed: its width is FeedWidthMeters, its height follows the image aspect (4:3),
-//     placed FeedDistanceMeters in front, FeedHeightOffsetMeters from eye level (negative = lower),
-//     and tilted by FeedTiltDegrees so the top leans toward the user.
-//   - Captured frame: its width is CapturedWidthMeters, its height follows its aspect (4:3),
-//     placed to the right of the feed with GapMeters between their edges. It is centred on the
-//     feed vertically. (A 4:3 frame at 0.30 m wide is 0.225 m tall, so it cannot match the feed's
-//     0.3375 m height without distorting the image.)
-//   - Title above the captured frame, detected IDs below it, build label in the feed's bottom-right.
+//   - Live feed: width FeedWidthMeters, height from the 4:3 image aspect, placed FeedDistanceMeters
+//     straight ahead, FeedHeightOffsetMeters from eye level (negative = lower), tilted by
+//     FeedTiltDegrees so the top leans toward the user.
+//   - Captured frame: width CapturedWidthMeters, height from its aspect, to the right of the feed
+//     with GapMeters between their edges. Centred vertically on the feed (a 4:3 frame at 0.30 m
+//     wide is 0.225 m tall, so it cannot match the feed's height without distortion).
+//   - Title above the captured frame; detected IDs below it.
+//   - Build label bottom-right of the feed; database status bottom-left of the feed.
 //
-// Text: TextMesh is scaled so its height matches the Inspector value (no guessing of TextMesh units).
+// Text sizing: each TextMesh is scaled so its measured rendered height matches the Inspector
+// value, and its width never exceeds the panel's width. Measurement happens one frame after the
+// text changes, because TextMesh regenerates its mesh lazily. The result is logged as
+// "[BoxTag] text ... rendered size", so the scale can be checked against the log.
 
+using System.Collections;
+using System.Collections.Generic;
 using UnityEngine;
 
 namespace BoxTagApp
@@ -46,15 +51,18 @@ namespace BoxTagApp
         [Tooltip("Gap in metres between the feed panel's right edge and the captured panel's left edge.")]
         [SerializeField] private float m_gapMeters = 0.05f;
 
-        [Header("Text heights (metres)")]
+        [Header("Text heights (metres, rendered)")]
         [Tooltip("Height of the \"Captured frame\" title.")]
-        [SerializeField] private float m_titleHeightMeters = 0.02f;
+        [SerializeField] private float m_titleHeightMeters = 0.01f;
 
         [Tooltip("Height of each line of detected-ID text.")]
-        [SerializeField] private float m_idLineHeightMeters = 0.04f;
+        [SerializeField] private float m_idLineHeightMeters = 0.02f;
 
-        [Tooltip("Height of the small build label in the feed's bottom-right corner.")]
-        [SerializeField] private float m_buildHeightMeters = 0.01f;
+        [Tooltip("Height of the small build label (bottom-right of the feed).")]
+        [SerializeField] private float m_buildHeightMeters = 0.006f;
+
+        [Tooltip("Height of the database status line (bottom-left of the feed).")]
+        [SerializeField] private float m_databaseHeightMeters = 0.008f;
 
         [Header("Panels and text (wired by Setup Scene)")]
         [SerializeField] private Transform m_feedPanel;
@@ -63,15 +71,13 @@ namespace BoxTagApp
         [SerializeField] private TextMesh m_idText;
 
         private TextMesh m_buildText;
+        private TextMesh m_databaseText;
         private float m_feedAspect = 4f / 3f;
         private float m_capturedAspect = 4f / 3f;
         private bool m_feedFlipX;
         private bool m_feedFlipY;
         private bool m_placed;
-
-        // Public read-only values, so other scripts use the same numbers.
-        public float FeedWidthMeters => m_feedWidthMeters;
-        public float CapturedWidthMeters => m_capturedWidthMeters;
+        private readonly Dictionary<TextMesh, Coroutine> m_fitRoutines = new Dictionary<TextMesh, Coroutine>();
 
         private void Awake()
         {
@@ -84,9 +90,19 @@ namespace BoxTagApp
             {
                 ApplyScale(m_capturedPanel, m_capturedWidthMeters, m_capturedAspect, false, false);
             }
-            CreateBuildLabel();
-            FitText(m_titleText, m_titleHeightMeters, 1);
-            FitText(m_idText, m_idLineHeightMeters, 1);
+
+            m_buildText = CreateLabel("BoxTagBuildLabel", TextAnchor.LowerRight, TextAlignment.Right,
+                new Color(1f, 1f, 1f, 0.6f));
+            m_buildText.text = "build " + Application.version;
+
+            m_databaseText = CreateLabel("BoxTagDatabaseStatus", TextAnchor.LowerLeft, TextAlignment.Left,
+                new Color(1f, 1f, 1f, 0.8f));
+            m_databaseText.text = "DB: starting";
+
+            FitWhenReady(m_buildText, m_buildHeightMeters, 1, FeedWidth * 0.4f);
+            FitWhenReady(m_databaseText, m_databaseHeightMeters, 1, FeedWidth * 0.6f);
+            FitWhenReady(m_titleText, m_titleHeightMeters, 1, CapturedWidth);
+            FitWhenReady(m_idText, m_idLineHeightMeters, 1, CapturedWidth);
         }
 
         private void Update()
@@ -129,7 +145,7 @@ namespace BoxTagApp
             LayoutRest();
         }
 
-        /// <summary>Sets the detected-ID text and sizes it so each line has the Inspector height.</summary>
+        /// <summary>Sets the detected-ID text. Each line gets the Inspector height and stays within the panel width.</summary>
         public void SetIdText(string text)
         {
             if (m_idText == null)
@@ -138,7 +154,18 @@ namespace BoxTagApp
             }
             m_idText.text = text;
             int lines = text.Split('\n').Length;
-            FitText(m_idText, m_idLineHeightMeters, lines);
+            FitWhenReady(m_idText, m_idLineHeightMeters, lines, CapturedWidth);
+        }
+
+        /// <summary>Sets the database status line (bottom-left of the feed).</summary>
+        public void SetDatabaseStatus(string text)
+        {
+            if (m_databaseText == null)
+            {
+                return;
+            }
+            m_databaseText.text = text;
+            FitWhenReady(m_databaseText, m_databaseHeightMeters, 1, FeedWidth * 0.6f);
         }
 
         /// <summary>Places the feed in front of the head, then lays out everything else.</summary>
@@ -170,7 +197,10 @@ namespace BoxTagApp
             LayoutRest();
         }
 
-        // Positions the captured panel, the title, the ID text and the build label relative to the feed.
+        private float FeedWidth => Mathf.Abs(m_feedPanel != null ? m_feedPanel.localScale.x : m_feedWidthMeters);
+        private float CapturedWidth => m_capturedWidthMeters * 0.95f;
+
+        // Positions the captured panel, title, ID text and corner labels relative to the feed.
         private void LayoutRest()
         {
             if (m_feedPanel == null)
@@ -184,8 +214,8 @@ namespace BoxTagApp
 
             if (m_capturedPanel != null)
             {
-                float capHalfW = Mathf.Abs(m_capturedPanel.localScale.x) * 0.5f;
                 float capHalfH = Mathf.Abs(m_capturedPanel.localScale.y) * 0.5f;
+                float capHalfW = Mathf.Abs(m_capturedPanel.localScale.x) * 0.5f;
 
                 // Right of the feed, same vertical centre, same tilt.
                 Vector3 capPos = feed.position + feed.right * (feedHalfW + m_gapMeters + capHalfW);
@@ -194,40 +224,40 @@ namespace BoxTagApp
                 if (m_titleText != null)
                 {
                     m_titleText.transform.SetPositionAndRotation(
-                        capPos + m_capturedPanel.up * (capHalfH + 0.01f),
-                        feed.rotation);
+                        capPos + feed.up * (capHalfH + 0.01f), feed.rotation);
                 }
 
                 if (m_idText != null)
                 {
                     m_idText.transform.SetPositionAndRotation(
-                        capPos - m_capturedPanel.up * (capHalfH + 0.01f),
-                        feed.rotation);
+                        capPos - feed.up * (capHalfH + 0.01f), feed.rotation);
                 }
             }
 
+            // Corner labels: just inside the feed's bottom corners, slightly toward the user.
+            Vector3 toUser = -feed.forward * 0.005f;
             if (m_buildText != null)
             {
-                // Bottom-right corner of the feed, just in front of the panel (toward the user).
-                Vector3 corner = feed.position
-                                 + feed.right * (feedHalfW - 0.01f)
-                                 + feed.up * (-feedHalfH + 0.01f)
-                                 - feed.forward * 0.005f;
+                Vector3 corner = feed.position + feed.right * (feedHalfW - 0.01f) + feed.up * (-feedHalfH + 0.01f) + toUser;
                 m_buildText.transform.SetPositionAndRotation(corner, feed.rotation);
+            }
+            if (m_databaseText != null)
+            {
+                Vector3 corner = feed.position - feed.right * (feedHalfW - 0.01f) + feed.up * (-feedHalfH + 0.01f) + toUser;
+                m_databaseText.transform.SetPositionAndRotation(corner, feed.rotation);
             }
         }
 
-        private void CreateBuildLabel()
+        private TextMesh CreateLabel(string name, TextAnchor anchor, TextAlignment alignment, Color color)
         {
-            var go = new GameObject("BoxTagBuildLabel");
-            m_buildText = go.AddComponent<TextMesh>();
-            m_buildText.text = "build " + Application.version;
-            m_buildText.characterSize = 0.01f;
-            m_buildText.fontSize = 100;
-            m_buildText.anchor = TextAnchor.LowerRight;
-            m_buildText.alignment = TextAlignment.Right;
-            m_buildText.color = new Color(1f, 1f, 1f, 0.6f);
-            FitText(m_buildText, m_buildHeightMeters, 1);
+            var go = new GameObject(name);
+            var text = go.AddComponent<TextMesh>();
+            text.characterSize = 0.01f;
+            text.fontSize = 100;
+            text.anchor = anchor;
+            text.alignment = alignment;
+            text.color = color;
+            return text;
         }
 
         // Scales a panel quad: width from the setting, height from the aspect, flips via negative scale.
@@ -240,26 +270,74 @@ namespace BoxTagApp
                 1f);
         }
 
-        // Scales a TextMesh so its block height is lineHeight * lines, measured from its mesh.
-        private static void FitText(TextMesh text, float lineHeight, int lines)
+        // Starts a fit on the next frame (after TextMesh regenerates its mesh), replacing any pending fit.
+        private void FitWhenReady(TextMesh text, float lineHeight, int lines, float maxWidth)
         {
-            if (text == null)
+            if (text == null || !isActiveAndEnabled)
             {
                 return;
             }
+            if (m_fitRoutines.TryGetValue(text, out Coroutine running) && running != null)
+            {
+                StopCoroutine(running);
+            }
+            m_fitRoutines[text] = StartCoroutine(FitRoutine(text, lineHeight, lines, maxWidth));
+        }
+
+        private IEnumerator FitRoutine(TextMesh text, float lineHeight, int lines, float maxWidth)
+        {
+            // Reset to the unit scale and wait a frame, so the measured mesh is the real text mesh.
             text.transform.localScale = Vector3.one;
-            var filter = text.GetComponent<MeshFilter>();
+            for (int attempt = 0; attempt < 10; attempt++)
+            {
+                yield return null;
+
+                if (TryMeasureUnscaled(text, out Vector2 size))
+                {
+                    float targetHeight = lineHeight * lines;
+                    float scale = targetHeight / size.y;
+                    if (maxWidth > 0f && size.x * scale > maxWidth)
+                    {
+                        scale = maxWidth / size.x; // shrink to fit the panel width, never overflow
+                    }
+                    text.transform.localScale = Vector3.one * scale;
+
+                    Debug.Log("[BoxTag] text '" + Preview(text.text) + "' rendered size: height=" +
+                              (size.y * scale).ToString("F4") + " m, width=" + (size.x * scale).ToString("F4") +
+                              " m (target height " + targetHeight.ToString("F4") + " m, max width " +
+                              maxWidth.ToString("F3") + " m, scale " + scale.ToString("F5") + ")");
+                    yield break;
+                }
+            }
+            Debug.LogWarning("[BoxTag] text '" + Preview(text.text) + "' could not be measured; left at unit scale.");
+        }
+
+        // Unscaled rendered size of the text mesh (local units; the text is scaled by its transform).
+        private static bool TryMeasureUnscaled(TextMesh text, out Vector2 size)
+        {
+            size = Vector2.zero;
+            MeshFilter filter = text.GetComponent<MeshFilter>();
             if (filter == null || filter.sharedMesh == null)
             {
-                return;
+                return false;
             }
-            float measured = filter.sharedMesh.bounds.size.y;
-            if (measured <= 0f)
+            Bounds b = filter.sharedMesh.bounds;
+            if (b.size.x <= 0f || b.size.y <= 0f)
             {
-                return;
+                return false;
             }
-            float scale = (lineHeight * lines) / measured;
-            text.transform.localScale = Vector3.one * scale;
+            size = new Vector2(b.size.x, b.size.y);
+            return true;
+        }
+
+        private static string Preview(string s)
+        {
+            if (string.IsNullOrEmpty(s))
+            {
+                return "";
+            }
+            string oneLine = s.Replace("\n", " | ");
+            return oneLine.Length > 24 ? oneLine.Substring(0, 24) + "..." : oneLine;
         }
 
         private static float Valid(float aspect, float fallback)

@@ -35,6 +35,9 @@ namespace BoxTagApp
         [SerializeField] private PassthroughCameraAccess m_cameraAccess;
         [SerializeField] private BoxTagDetector m_detector;
 
+        [Tooltip("Tag ID -> label database (set by Setup Scene).")]
+        [SerializeField] private BoxTagDatabase m_database;
+
         [Tooltip("Layout that sizes and places the panels and text (set by Setup Scene).")]
         [SerializeField] private BoxTagLayout m_layout;
 
@@ -148,8 +151,12 @@ namespace BoxTagApp
             var lines = new List<string>();
             foreach (TagResult tag in results)
             {
-                lines.Add("ID " + tag.Id + "  (" + tag.Position.magnitude.ToString("F2") + " m)");
-                Debug.Log("[BoxTag] Tag ID=" + tag.Id +
+                // The label comes from the database only (tags.json); unknown IDs are shown as such.
+                string label = m_database != null && m_database.TryGetLabel(tag.Id, out string found)
+                    ? found
+                    : "(not in database)";
+                lines.Add("ID " + tag.Id + " -> " + label);
+                Debug.Log("[BoxTag] Tag ID=" + tag.Id + " label=" + label +
                           " hamming=" + tag.Hamming +
                           " margin=" + tag.DecisionMargin.ToString("F1") +
                           " posCam=" + tag.Position.ToString("F3") +

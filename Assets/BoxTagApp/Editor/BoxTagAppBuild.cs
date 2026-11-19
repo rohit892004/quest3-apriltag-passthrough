@@ -6,7 +6,7 @@
 //   Unity.exe -batchmode -nographics -quit -projectPath <project> ^
 //     -executeMethod BoxTagAppBuild.BuildApkHeadless -logFile <log>
 //
-// Output: Builds/BoxTagApp_L2.apk (Builds/ is git-ignored).
+// Output: Builds/BoxTagApp_L3.apk (Builds/ is git-ignored).
 
 using System.IO;
 using System.Linq;
@@ -17,7 +17,7 @@ using UnityEngine;
 public static class BoxTagAppBuild
 {
     private const string BoxTagScene = "Assets/BoxTagApp/Scene/BoxTagApp.unity";
-    private const string ApkPath = "Builds/BoxTagApp_L2.apk";
+    private const string ApkPath = "Builds/BoxTagApp_L3.apk";
 
     // App identity. PLACEHOLDER package name: change "assignment" to your own name, e.g.
     // "com.yourname.boxtagapp". This is the only place to change it. Changing it installs a

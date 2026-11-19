@@ -73,10 +73,17 @@ public static class BoxTagAppSetup
         SetPrivate(layout, "m_titleText", titleText);
         SetPrivate(layout, "m_idText", resultText);
 
+        // L3: tag ID -> label database (settings asset is created once and kept on later runs).
+        var databaseGo = new GameObject("BoxTagDatabase");
+        var database = databaseGo.AddComponent<BoxTagDatabase>();
+        SetPrivate(database, "m_settings", GetOrCreateDatabaseSettings());
+        SetPrivate(database, "m_layout", layout);
+
         var captureGo = new GameObject("BoxTagCapture");
         var capture = captureGo.AddComponent<BoxTagCapture>();
         SetPrivate(capture, "m_cameraAccess", cameraAccess);
         SetPrivate(capture, "m_detector", detector);
+        SetPrivate(capture, "m_database", database);
         SetPrivate(capture, "m_layout", layout);
         SetPrivate(capture, "m_capturedScreen", capturedScreen);
 
@@ -182,6 +189,21 @@ public static class BoxTagAppSetup
         // 5. No skybox and flat ambient light, so nothing from the default environment is drawn.
         RenderSettings.skybox = null;
         RenderSettings.ambientMode = UnityEngine.Rendering.AmbientMode.Flat;
+    }
+
+    // Database settings asset. Created on the first run; later runs keep the edited values
+    // (for example the Gist URL you paste into the Inspector).
+    private static BoxTagDatabaseSettings GetOrCreateDatabaseSettings()
+    {
+        string path = Root + "/Data/BoxTagDatabaseSettings.asset";
+        var existing = AssetDatabase.LoadAssetAtPath<BoxTagDatabaseSettings>(path);
+        if (existing != null)
+        {
+            return existing;
+        }
+        var settings = ScriptableObject.CreateInstance<BoxTagDatabaseSettings>();
+        AssetDatabase.CreateAsset(settings, path);
+        return settings;
     }
 
     private static void SetBool(SerializedObject so, string field, bool value)
