@@ -21,7 +21,8 @@
 // Placement: the feed is placed once a head pose exists, straight ahead of the head at
 // FeedDistanceMeters. The captured panel is placed to its right, with GapMeters between them.
 //
-// Controls: right grip re-places the panels in front of the head.
+// Controls: right grip short tap re-places the panels in front of the head (handled by BoxTagLabels,
+// which also clears the labels on a 1 s hold).
 //
 // Fonts: TextMeshPro needs its "TMP Essentials" import once per project
 // (Window > TextMeshPro > Import TMP Essentials). Without it, no text is drawn and an error is logged.
@@ -158,12 +159,7 @@ namespace BoxTagApp
                 PlaceAll();
             }
 
-            // Right grip: re-place in front of the current head position.
-            if (OVRInput.GetDown(OVRInput.Button.SecondaryHandTrigger))
-            {
-                PlaceAll();
-                Debug.Log("[BoxTag] Panels re-placed in front of the head.");
-            }
+            // Right grip (short tap re-places, long hold clears labels) is handled by BoxTagLabels.
         }
 
         /// <summary>Sets the live feed's image, aspect and flips. The height follows the aspect.</summary>

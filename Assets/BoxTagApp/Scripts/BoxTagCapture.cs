@@ -44,6 +44,7 @@ namespace BoxTagApp
         private Texture2D m_capturedTexture;
         private AudioSource m_audio;
         private AudioClip m_beep;
+        private BoxTagLabels m_labels;
 
         private void Awake()
         {
@@ -51,6 +52,14 @@ namespace BoxTagApp
             m_audio.playOnAwake = false;
             m_audio.spatialBlend = 0f; // plain 2D beep, not positioned in the room
             m_beep = MakeBeep(880f, 0.12f);
+
+            // L4: floating labels. Added at runtime, so the scene needs no change.
+            m_labels = GetComponent<BoxTagLabels>();
+            if (m_labels == null)
+            {
+                m_labels = gameObject.AddComponent<BoxTagLabels>();
+            }
+            m_labels.Initialize(m_layout, m_database);
         }
 
         private void Update()
@@ -125,16 +134,22 @@ namespace BoxTagApp
             ShowCapturedFrame(frame);
             SetText("Detecting...");
 
-            m_detector.Submit(frame, OnDetectionDone);
+            m_detector.Submit(frame, results => OnDetectionDone(frame, results));
         }
 
         // Runs on the MAIN thread when the worker finishes.
-        private void OnDetectionDone(List<TagResult> results)
+        private void OnDetectionDone(CapturedFrame frame, List<TagResult> results)
         {
             if (results == null)
             {
                 SetText("Detection failed (see log)");
                 return;
+            }
+
+            // L4: one label per tag, placed with the capture-time camera pose.
+            if (m_labels != null)
+            {
+                m_labels.ApplyDetections(frame, results);
             }
 
             if (results.Count == 0)

@@ -13,8 +13,8 @@ Change `AndroidPackageName` in `Editor/BoxTagAppBuild.cs` to use a different pac
 |---|---|
 | L1 – camera feed on a world-space panel | Works on headset. |
 | L2 – capture, detect tag36h11, show IDs | Works on headset (beep, captured frame, ID). |
-| L3 – tag ID → label from database | Built (`Builds/BoxTagApp_L3.apk`). Needs a headset test and the real Gist URL. |
-| L4 – labels above real tags | Not started (L2 already computes camera-space tag poses) |
+| L3 – tag ID → label from database | Works on headset (online Gist, Left X reload). |
+| L4 – labels above real tags | Built (`Builds/BoxTagApp_L4.apk`). Needs a headset test: position, lock-on, and the Left Y axes. |
 | Bonus – continuous mode, tagStandard52h13 | Not started |
 
 ## Architecture
@@ -59,6 +59,34 @@ Setup Scene keeps this asset on later runs, so your URL is not overwritten.
 **Results on the panel:** `ID 1 -> Box no 1`, or `ID 5 -> (not in database)`.
 **Status row:** under the feed's camera image. `DB: ...` on the left, for example `DB: online, 2 tags`, and `Build ...` on the right.
 **Left X:** reloads the remote file. The result shows as `DB reloaded: N tags` for 3 seconds.
+
+## Floating labels (L4)
+
+Each detected tag gets one label, about 5 cm above the real tag (`Scripts/BoxTagLabels.cs`).
+
+**World pose:** the capture-time camera pose (`CapturedFrame.CameraPose`) × the tag pose from
+the detector, which is already converted from OpenCV by `BoxTagPoseMath.ToUnityCameraSpace`.
+The camera pose is copied at capture, so the label stays on the tag while you move.
+
+**Tag size:** `BoxTagDetector` → **Tag Size Meters** (the outer black square edge, e.g. `0.10`
+for a 10 cm tag). Set it before you capture.
+
+**Adding a tag:** edit the Gist, then press **left X**. Next capture shows the new label. No code change, no rebuild.
+
+**Unknown ID:** `ID 5 (not in DB)` in orange.
+
+**Re-detection:** the label eases to the new position. A tag not seen again keeps its label where it was.
+Labels re-read the database each frame, so a left X reload also updates existing labels.
+
+| Control | Action |
+|---|---|
+| Right A / right trigger | Capture and detect (unchanged). |
+| Left Y | Show or hide debug axes on each tag (red x, green y, blue z). |
+| Right grip, short tap | Re-place the panels in front of the head. |
+| Right grip, hold 1 s | Clear all labels. |
+| Left X | Reload the database (unchanged). |
+
+Log lines: `[BoxTag] tag ID=<id> world=(x, y, z) distance=<m> m (from capture camera)`.
 
 ## Layout settings (tweak in the Inspector, no code change)
 
