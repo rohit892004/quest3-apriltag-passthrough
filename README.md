@@ -8,7 +8,7 @@ Labels come from an online JSON database, so you can add a new tag (for example 
 ![Unity](https://img.shields.io/badge/Unity-6000.0.66f2-black)
 ![MRUK](https://img.shields.io/badge/MRUK-85.0.0-orange)
 ![AprilTag](https://img.shields.io/badge/AprilTag-tag36h11-green)
-![License](https://img.shields.io/badge/license-MIT-lightgrey)
+![License](https://img.shields.io/badge/license-MIT%20(BoxTag%20code)-lightgrey)
 
 ## Table of contents
 
@@ -91,7 +91,7 @@ flowchart LR
 
 ## Quick start: just try the APK
 
-1. Download `BoxTagApp_Final.apk` from **[Releases](../../releases)**.
+1. Get `BoxTagApp_Final.apk`. No release is published yet, so build it from source ([Build from source](#build-from-source)). When a release is published, it will be on the **[Releases](../../releases)** page.
 2. Enable **Developer Mode** on your Quest (Meta Horizon phone app → Devices → your headset → Developer Mode).
 3. Connect the headset over USB. Put it on and accept **"Allow USB debugging"**, ticking **"Always allow from this computer"**.
 4. Install:
@@ -144,6 +144,8 @@ The APK is written to `Builds/`. Close the Unity Editor first, because a batch b
 ## Set up your own tag database
 
 The app reads a JSON file from any public URL. The easiest host is a **GitHub Gist**.
+
+A ready-made example is in [tags.example.json](tags.example.json).
 
 1. Go to <https://gist.github.com>, name the file `tags.json`, and paste:
    ```json
@@ -214,6 +216,7 @@ Assets/
 │   │   ├── BoxTagDetector.cs       AprilTag detection on a worker thread
 │   │   ├── BoxTagPoseMath.cs       Intrinsics crop/scale, OpenCV → Unity conversion, reprojection
 │   │   ├── BoxTagDatabase.cs       Level 3: download, cache and fallback for tags.json
+│   │   ├── BoxTagDatabaseSettings.cs  Remote URL, timeout and cache file name (ScriptableObject)
 │   │   ├── BoxTagLabels.cs         Level 4: world-space labels, smoothing, removal
 │   │   └── BoxTagLayout.cs         UI panels (sizes and distances in one place)
 │   ├── Editor/
@@ -312,10 +315,11 @@ Pull requests are welcome.
 
 ## Credits and licenses
 
-- **This project's code** (`Assets/BoxTagApp`): MIT, see [LICENSE](LICENSE).
+- **This project's code** (`Assets/BoxTagApp`): MIT, see [Assets/BoxTagApp/LICENSE](Assets/BoxTagApp/LICENSE).
 - **AprilTag C library**: © University of Michigan APRIL Robotics Lab, BSD-2-Clause. Unity wrapper based on [keijiro/jp.keijiro.apriltag](https://github.com/keijiro/jp.keijiro.apriltag). See `Assets/AprilTag/LICENSE`.
-- **Meta Passthrough Camera API Samples** ([oculus-samples/Unity-PassthroughCameraApiSamples](https://github.com/oculus-samples/Unity-PassthroughCameraApiSamples)): used as the base project, under Meta's license. See its LICENSE file.
-- **Meta XR SDK / MRUK**: © Meta Platforms, under the Meta SDK license.
+- **Meta Passthrough Camera API Samples** ([oculus-samples/Unity-PassthroughCameraApiSamples](https://github.com/oculus-samples/Unity-PassthroughCameraApiSamples)): used as the base project, MIT License (Meta Platforms, Inc.). See `Assets/PassthroughCameraApiSamples/LICENSE.txt`. The sample's original README is kept as [SAMPLE_README.md](SAMPLE_README.md).
+- **Meta XR SDK / MRUK**: © Meta Platforms, under the Oculus SDK License Agreement. See [LICENSE.txt](LICENSE.txt).
+- Full credits: [CREDITS.md](CREDITS.md).
 
 ---
 

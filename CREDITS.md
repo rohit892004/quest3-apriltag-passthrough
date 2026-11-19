@@ -3,8 +3,8 @@
 ## BoxTag App (`Assets/BoxTagApp/`)
 
 Own code: scripts, editor tools, data files, materials, and documentation in `Assets/BoxTagApp/`,
-plus the scene `Assets/BoxTagApp/Scene/BoxTagApp.unity`. The license for this code is not yet chosen
-(see the note at the end).
+plus the scene `Assets/BoxTagApp/Scene/BoxTagApp.unity`. License: **MIT**, see
+[Assets/BoxTagApp/LICENSE](Assets/BoxTagApp/LICENSE).
 
 ## AprilTag library (`Assets/AprilTag/`)
 
@@ -31,5 +31,11 @@ plus the scene `Assets/BoxTagApp/Scene/BoxTagApp.unity`. The license for this co
 
 ## Note on the repository license
 
-The root `LICENSE.txt` is the Oculus SDK License from the Meta sample. It does not cover the BoxTag
-code. A license for the BoxTag code has not been chosen yet.
+The repository is a mix of licenses. Each part keeps its own:
+- BoxTag code: MIT (`Assets/BoxTagApp/LICENSE`).
+- AprilTag library: BSD-2-Clause (`Assets/AprilTag/LICENSE`).
+- Meta sample: MIT (`Assets/PassthroughCameraApiSamples/LICENSE.txt`).
+- Meta XR SDK / MRUK: Oculus SDK License Agreement (`LICENSE.txt` at the root).
+
+The root `LICENSE.txt` is the Oculus SDK License from the Meta sample. It is not an MIT file for the
+whole repository.

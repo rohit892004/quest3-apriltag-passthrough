@@ -167,7 +167,7 @@ Publishing Settings` before you distribute it.
 ## Licenses and attribution
 
 - **Own code (BoxTag App):** everything in `Assets/BoxTagApp/` (scripts, editor tools, data, materials, this README).
-  The scene `Scene/BoxTagApp.unity` is also part of this app.
+  The scene `Scene/BoxTagApp.unity` is also part of this app. License: **MIT**, see `Assets/BoxTagApp/LICENSE`.
 - **AprilTag library:** `Assets/AprilTag/` (Unity wrapper by keijiro, built on the AprilTag C library). BSD-2-Clause
   (copyright The Regents of The University of Michigan, see `Assets/AprilTag/LICENSE`). Used as-is; not edited.
 - **Meta Passthrough Camera API sample:** `Assets/PassthroughCameraApiSamples/`. MIT License (Meta Platforms, Inc.,
