@@ -50,27 +50,35 @@ public static class BoxTagAppSetup
         Renderer screen = CreateFeedPanel();
 
         // Feed controller: wires the camera access and the panel together.
+        // Layout: owns every panel and text size/position (Inspector values on this object).
+        var layoutGo = new GameObject("BoxTagLayout");
+        var layout = layoutGo.AddComponent<BoxTagLayout>();
+
         var feedGo = new GameObject("BoxTagCameraFeed");
         var feed = feedGo.AddComponent<BoxTagCameraFeed>();
         SetPrivate(feed, "m_cameraAccess", cameraAccess);
         SetPrivate(feed, "m_screen", screen);
+        SetPrivate(feed, "m_layout", layout);
 
         // L2: detector (worker-thread AprilTag tag36h11) and capture controller.
         var detectorGo = new GameObject("BoxTagDetector");
         var detector = detectorGo.AddComponent<BoxTagDetector>();
 
         Renderer capturedScreen = CreatePanel("CapturedFramePanel");
-        TextMesh titleText = CreateText("CapturedFrameTitle", "Captured frame", 0.03f, 72, TextAnchor.LowerCenter);
-        TextMesh resultText = CreateText("CaptureResultText", "Press A or right trigger to capture", 0.045f, 110, TextAnchor.UpperCenter);
+        TextMesh titleText = CreateText("CapturedFrameTitle", "Captured frame", 0.02f, 72, TextAnchor.LowerCenter);
+        TextMesh resultText = CreateText("CaptureResultText", "Press A or right trigger to capture", 0.04f, 110, TextAnchor.UpperCenter);
+
+        SetPrivate(layout, "m_feedPanel", screen.transform);
+        SetPrivate(layout, "m_capturedPanel", capturedScreen.transform);
+        SetPrivate(layout, "m_titleText", titleText);
+        SetPrivate(layout, "m_idText", resultText);
 
         var captureGo = new GameObject("BoxTagCapture");
         var capture = captureGo.AddComponent<BoxTagCapture>();
         SetPrivate(capture, "m_cameraAccess", cameraAccess);
         SetPrivate(capture, "m_detector", detector);
-        SetPrivate(capture, "m_feed", feed);
+        SetPrivate(capture, "m_layout", layout);
         SetPrivate(capture, "m_capturedScreen", capturedScreen);
-        SetPrivate(capture, "m_titleText", titleText);
-        SetPrivate(capture, "m_resultText", resultText);
 
         EnsureFolder(Root + "/Scene");
         // Passthrough: applied after all objects exist so it also covers the rig's cameras.

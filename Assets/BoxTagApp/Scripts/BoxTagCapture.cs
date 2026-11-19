@@ -14,6 +14,9 @@
 //   - Only the first Width*Height entries of GetColors() are valid pixels. MRUK allocates the
 //     buffer as Width*Height*4 Color32 entries.
 //
+// Panel sizes and positions are owned by BoxTagLayout. This script only supplies the image,
+// its aspect, and the ID text.
+//
 // Feedback on capture: a short beep and a brief white flash of the captured-frame panel.
 //
 // Camera ownership: this script only reads from the MRUK PassthroughCameraAccess component.
@@ -31,25 +34,14 @@ namespace BoxTagApp
     {
         [SerializeField] private PassthroughCameraAccess m_cameraAccess;
         [SerializeField] private BoxTagDetector m_detector;
-        [SerializeField] private BoxTagCameraFeed m_feed;
+
+        [Tooltip("Layout that sizes and places the panels and text (set by Setup Scene).")]
+        [SerializeField] private BoxTagLayout m_layout;
 
         [Tooltip("Quad that shows the captured frame.")]
         [SerializeField] private Renderer m_capturedScreen;
 
-        [Tooltip("Title above the captured frame (\"Captured frame\").")]
-        [SerializeField] private TextMesh m_titleText;
-
-        [Tooltip("Detected tag IDs, shown in large text under the captured frame.")]
-        [SerializeField] private TextMesh m_resultText;
-
-        [Tooltip("Gap in metres between the live feed panel and the captured-frame panel.")]
-        [SerializeField] private float m_gapMeters = 0.3f;
-
-        [Tooltip("Used only if the live feed panel is missing.")]
-        [SerializeField] private float m_fallbackHeightMeters = 0.8f;
-
         private Texture2D m_capturedTexture;
-        private bool m_capturedPanelPlaced;
         private AudioSource m_audio;
         private AudioClip m_beep;
         private Coroutine m_flash;
@@ -166,7 +158,7 @@ namespace BoxTagApp
             SetText(string.Join("\n", lines));
         }
 
-        // Shows the captured frame on its own panel, next to the live feed.
+        // Shows the captured frame on its panel. The layout sizes and places the panel.
         private void ShowCapturedFrame(CapturedFrame frame)
         {
             if (m_capturedTexture == null || m_capturedTexture.width != frame.Width || m_capturedTexture.height != frame.Height)
@@ -188,46 +180,10 @@ namespace BoxTagApp
             }
             m_capturedScreen.material.mainTexture = m_capturedTexture;
 
-            // Same height as the live feed, width from the image's aspect ratio.
-            float height = m_feed != null && m_feed.ScreenHeightMeters > 0f
-                ? m_feed.ScreenHeightMeters
-                : m_fallbackHeightMeters;
-            float aspect = (float)frame.Width / frame.Height;
-            float width = height * aspect;
-            m_capturedScreen.transform.localScale = new Vector3(width, height, 1f);
-
-            PlaceCapturedPanelNextToFeed(width, height);
-        }
-
-        // Places the captured-frame panel once, to the right of the live feed, facing the same way.
-        // Title sits above it, and the detected IDs sit below it.
-        private void PlaceCapturedPanelNextToFeed(float capturedWidth, float capturedHeight)
-        {
-            if (m_capturedPanelPlaced || m_feed == null || m_feed.ScreenTransform == null)
+            if (m_layout != null)
             {
-                return;
+                m_layout.SetCapturedAspect((float)frame.Width / frame.Height);
             }
-
-            Transform feed = m_feed.ScreenTransform;
-            Vector3 offset = feed.right * (m_feed.ScreenWidthMeters * 0.5f + m_gapMeters + capturedWidth * 0.5f);
-
-            Transform panel = m_capturedScreen.transform;
-            panel.position = feed.position + offset;
-            panel.rotation = feed.rotation;
-
-            if (m_titleText != null)
-            {
-                m_titleText.transform.position = panel.position + panel.up * (capturedHeight * 0.5f + 0.05f);
-                m_titleText.transform.rotation = feed.rotation;
-            }
-
-            if (m_resultText != null)
-            {
-                m_resultText.transform.position = panel.position - panel.up * (capturedHeight * 0.5f + 0.05f);
-                m_resultText.transform.rotation = feed.rotation;
-            }
-
-            m_capturedPanelPlaced = true;
         }
 
         // Beep plus a short white flash of the captured panel, so the press is clearly acknowledged.
@@ -276,9 +232,9 @@ namespace BoxTagApp
 
         private void SetText(string text)
         {
-            if (m_resultText != null)
+            if (m_layout != null)
             {
-                m_resultText.text = text;
+                m_layout.SetIdText(text);
             }
         }
     }

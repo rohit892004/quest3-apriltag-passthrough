@@ -4,6 +4,9 @@
 // Camera ownership: the ONLY camera owner in BoxTagApp is the MRUK
 // PassthroughCameraAccess component (Meta.XR namespace) referenced below.
 // Do not add WebCamTextureManager or AprilTag scripts to this scene.
+//
+// Size and placement are owned by BoxTagLayout. This script only shows the image and reports
+// its aspect and flips to the layout.
 
 using Meta.XR;
 using UnityEngine;
@@ -18,11 +21,8 @@ namespace BoxTagApp
         [Tooltip("Quad renderer that displays the camera image.")]
         [SerializeField] private Renderer m_screen;
 
-        [Tooltip("Distance in metres from the head to the panel, set once when the panel is placed.")]
-        [SerializeField] private float m_distanceMeters = 1.2f;
-
-        [Tooltip("Height of the panel in metres. Width follows the camera aspect ratio.")]
-        [SerializeField] private float m_heightMeters = 0.8f;
+        [Tooltip("Layout that sizes and places the panel (set by Setup Scene).")]
+        [SerializeField] private BoxTagLayout m_layout;
 
         [Tooltip("Mirror the image horizontally. Turn on if the feed looks mirrored on the headset.")]
         [SerializeField] private bool m_flipX = false;
@@ -30,7 +30,6 @@ namespace BoxTagApp
         [Tooltip("Mirror the image vertically. Turn on if the feed looks upside down.")]
         [SerializeField] private bool m_flipY = false;
 
-        private bool m_placed;
         private Vector2Int m_appliedResolution = Vector2Int.zero;
 
         private void Awake()
@@ -63,71 +62,16 @@ namespace BoxTagApp
                 m_screen.material.mainTexture = cameraTexture;
             }
 
-            // Resize the panel when the camera resolution changes (it can differ from the requested one).
+            // Tell the layout the aspect whenever the camera resolution changes.
             Vector2Int resolution = m_cameraAccess.CurrentResolution;
             if (resolution != m_appliedResolution && resolution.x > 0 && resolution.y > 0)
             {
                 m_appliedResolution = resolution;
-                ApplyAspectRatio(resolution);
+                if (m_layout != null)
+                {
+                    m_layout.SetFeedAspect((float)resolution.x / resolution.y, m_flipX, m_flipY);
+                }
             }
-
-            if (!m_placed)
-            {
-                PlaceInFrontOfHead();
-            }
-        }
-
-        /// <summary>Transform of the live feed panel (used to place the captured-frame panel next to it).</summary>
-        public Transform ScreenTransform => m_screen != null ? m_screen.transform : null;
-
-        /// <summary>Panel height in metres (the panel's local Y scale). The captured-frame panel matches it.</summary>
-        public float ScreenHeightMeters => m_screen != null ? m_screen.transform.localScale.y : 0f;
-
-        /// <summary>Panel width in metres (the panel's local X scale).</summary>
-        public float ScreenWidthMeters => m_screen != null ? m_screen.transform.localScale.x : 0f;
-
-        /// <summary>Moves the panel in front of the user's head again (useful while testing).</summary>
-        public void Recenter()
-        {
-            m_placed = false;
-        }
-
-        // Sets the quad scale so the image is not stretched.
-        // A Unity quad is 1 x 1 units, so scale = (width, height).
-        private void ApplyAspectRatio(Vector2Int resolution)
-        {
-            float aspect = (float)resolution.x / resolution.y;
-            float width = m_heightMeters * aspect;
-            float signX = m_flipX ? -1f : 1f;
-            float signY = m_flipY ? -1f : 1f;
-            m_screen.transform.localScale = new Vector3(width * signX, m_heightMeters * signY, 1f);
-        }
-
-        // Places the panel once, straight ahead of the head, facing the user.
-        // After that the panel stays where it is in world space.
-        private void PlaceInFrontOfHead()
-        {
-            Transform head = Camera.main != null ? Camera.main.transform : null;
-            if (head == null)
-            {
-                return; // No head pose yet; try again next frame.
-            }
-
-            Vector3 forward = head.forward;
-            forward.y = 0f;
-            if (forward.sqrMagnitude < 0.0001f)
-            {
-                forward = Vector3.forward;
-            }
-            forward.Normalize();
-
-            Vector3 position = head.position + forward * m_distanceMeters;
-            m_screen.transform.position = position;
-
-            // A Unity quad's visible side faces its local -Z, so point -Z at the head.
-            m_screen.transform.rotation = Quaternion.LookRotation(position - head.position);
-
-            m_placed = true;
         }
     }
 }
