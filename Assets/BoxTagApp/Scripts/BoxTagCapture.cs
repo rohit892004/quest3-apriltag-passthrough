@@ -3,6 +3,7 @@
 //
 // Input: right controller A button (OVRInput.Button.One) or right index trigger
 //        (OVRInput.Button.SecondaryIndexTrigger). Press = capture, one at a time.
+//        Right B (OVRInput.Button.Two) toggles continuous mode. In continuous mode A/trigger do nothing.
 //
 // Capture rules (from the L2 plan):
 //   - GetColors() blocks briefly. That is acceptable for a single press.
@@ -14,10 +15,17 @@
 //   - Only the first Width*Height entries of GetColors() are valid pixels. MRUK allocates the
 //     buffer as Width*Height*4 Color32 entries.
 //
+// Row order: single capture pixels are in the order of GetColors(). Continuous frames come from
+// AsyncGPUReadback, whose row order may differ. When continuous mode turns on, one GetColors() frame
+// is taken next to the first readback, and the two are compared to decide whether the readback rows
+// need flipping. Every continuous frame then uses that decision, so both paths feed the detector in
+// the same order. Both paths use the same detection function (BoxTagDetector.Submit).
+//
 // Panel sizes and positions are owned by BoxTagLayout. This script only supplies the image,
 // its aspect, and the ID text.
 //
 // Feedback on capture: a short beep and a brief white flash of the captured-frame panel.
+// Debug PNGs are written to Application.persistentDataPath (paths are logged).
 //
 // Camera ownership: this script only reads from the MRUK PassthroughCameraAccess component.
 
@@ -41,6 +49,12 @@ namespace BoxTagApp
 
         [Tooltip("Layout that owns the panels, the captured image and the results text (set by Setup Scene).")]
         [SerializeField] private BoxTagLayout m_layout;
+
+        [Tooltip("Continuous row order: 0 = auto (measured against a single capture), 1 = always flip rows, 2 = never flip.")]
+        [SerializeField] private int m_continuousRowOrder = 0;
+
+        [Tooltip("Captured-panel preview rate in continuous mode (frames per second). Detection still runs about 5 per second.")]
+        [SerializeField] private float m_previewFps = 2f;
 
         private Texture2D m_capturedTexture;
         private AudioSource m_audio;
@@ -131,6 +145,7 @@ namespace BoxTagApp
                 Timestamp = m_cameraAccess.Timestamp,
                 CameraPose = m_cameraAccess.GetCameraPose(),
                 Intrinsics = scaled,
+                Shown = true,
             };
 
             Debug.Log(
@@ -143,6 +158,12 @@ namespace BoxTagApp
                 " cx=" + scaled.Cx.ToString("F1") + " cy=" + scaled.Cy.ToString("F1") +
                 " camPos=" + frame.CameraPose.position.ToString("F3") +
                 " camRot=" + frame.CameraPose.rotation.eulerAngles.ToString("F1"));
+
+            if (!m_savedSingleFrame)
+            {
+                m_savedSingleFrame = true;
+                SaveDebugPng(pixels, res.x, res.y, "single");
+            }
 
             PlayCaptureFeedback();
             ShowCapturedFrame(frame);
@@ -171,7 +192,12 @@ namespace BoxTagApp
             {
                 m_labels.ApplyDetections(frame, results, continuous);
             }
-            DrawReprojectionOverlay(results);
+
+            // The overlay goes on the image only when this frame is the one on the panel.
+            if (!continuous || frame.Shown)
+            {
+                DrawReprojectionOverlay(results);
+            }
 
             if (results.Count == 0)
             {
@@ -233,11 +259,20 @@ namespace BoxTagApp
         private float m_nextRequestTime;
         private int m_readbackErrors;
 
+        // Row order of the readback relative to single capture (GetColors order).
+        private bool m_needCalibration;
+        private bool m_readbackFlipRows;
+        private float m_lastPreviewTime = -1f;
+        private bool m_savedSingleFrame;
+        private bool m_savedContinuousFrame;
+
         private void ToggleContinuous()
         {
             m_continuous = !m_continuous;
             m_readbackErrors = 0;
             m_nextRequestTime = 0f;
+            m_needCalibration = m_continuous;   // re-measure the row order each time continuous turns on
+            m_savedContinuousFrame = false;
             if (m_layout != null)
             {
                 m_layout.SetContinuous(m_continuous);
@@ -281,13 +316,32 @@ namespace BoxTagApp
                 Intrinsics = scaled,
             };
 
+            // First frame after turning on: also take a single-capture frame (GetColors order) at the same
+            // moment, to measure the row order. This is one blocking read, only once per toggle.
+            Color32[] singleOrder = null;
+            if (m_needCalibration)
+            {
+                NativeArray<Color32> colors = m_cameraAccess.GetColors();
+                int n = source.width * source.height;
+                if (colors.IsCreated && colors.Length >= n)
+                {
+                    singleOrder = colors.GetSubArray(0, n).ToArray();
+                }
+                else
+                {
+                    m_needCalibration = false;
+                    Debug.LogWarning("[BoxTag] continuous row-order check skipped: GetColors() not available.");
+                }
+            }
+
             m_readbackInFlight = true;
             m_nextRequestTime = Time.realtimeSinceStartup + ContinuousIntervalSeconds;
-            AsyncGPUReadback.Request(source, 0, TextureFormat.RGBA32, request => OnReadbackDone(request, frame));
+            AsyncGPUReadback.Request(source, 0, TextureFormat.RGBA32,
+                request => OnReadbackDone(request, frame, singleOrder));
         }
 
-        // Runs on the main thread when the GPU has the pixels. Copies them, then starts detection.
-        private void OnReadbackDone(AsyncGPUReadbackRequest request, CapturedFrame frame)
+        // Runs on the main thread when the GPU has the pixels. Copies them, sets the row order, then detects.
+        private void OnReadbackDone(AsyncGPUReadbackRequest request, CapturedFrame frame, Color32[] singleOrder)
         {
             m_readbackInFlight = false;
 
@@ -318,18 +372,137 @@ namespace BoxTagApp
             var stopwatch = System.Diagnostics.Stopwatch.StartNew();
             NativeArray<Color32> data = request.GetData<Color32>();
             // Copy now: the readback buffer is released when this callback returns.
-            Color32[] pixels = data.ToArray();
+            Color32[] raw = data.ToArray();
             frame.CopyMs = (float)stopwatch.Elapsed.TotalMilliseconds;
-            if (pixels.Length < frame.Width * frame.Height)
+            if (raw.Length < frame.Width * frame.Height)
             {
                 return;
             }
-            frame.Pixels = pixels;
 
-            ShowCapturedFrame(frame);
+            if (singleOrder != null)
+            {
+                DecideRowOrder(raw, singleOrder, frame.Width, frame.Height);
+                SaveDebugPng(raw, frame.Width, frame.Height, "continuous-raw-calibration");
+                SaveDebugPng(singleOrder, frame.Width, frame.Height, "single-order-calibration");
+            }
+
+            bool flip = m_continuousRowOrder == 1 || (m_continuousRowOrder == 0 && m_readbackFlipRows);
+            if (flip)
+            {
+                FlipRows(raw, frame.Width, frame.Height);
+            }
+            frame.Pixels = raw;
+
+            if (!m_savedContinuousFrame)
+            {
+                m_savedContinuousFrame = true;
+                SaveDebugPng(raw, frame.Width, frame.Height, "continuous");
+            }
+
+            // Preview on the captured panel at a fixed rate; detection still runs on every frame.
+            float previewInterval = 1f / Mathf.Max(0.1f, m_previewFps);
+            frame.Shown = m_lastPreviewTime < 0f || Time.realtimeSinceStartup - m_lastPreviewTime >= previewInterval;
+            if (frame.Shown)
+            {
+                m_lastPreviewTime = Time.realtimeSinceStartup;
+                ShowCapturedFrame(frame);
+            }
+
             if (!m_detector.Submit(frame, results => OnDetectionDone(frame, results, true)))
             {
                 Debug.Log("[BoxTag] continuous: detector busy, frame skipped");
+            }
+        }
+
+        // Compares the readback (raw) with the single-capture frame, with and without flipped rows,
+        // on the green channel (the detector uses green). The closer one wins.
+        private void DecideRowOrder(Color32[] raw, Color32[] single, int w, int h)
+        {
+            double keep = MeanGreenDifference(raw, single, w, h, false);
+            double flipped = MeanGreenDifference(raw, single, w, h, true);
+            double meanRaw = MeanGreen(raw, w, h);
+            double meanSingle = MeanGreen(single, w, h);
+
+            bool inconclusive = Mathf.Min((float)keep, (float)flipped) > 0.7f * Mathf.Max((float)keep, (float)flipped);
+            m_readbackFlipRows = !inconclusive && flipped < keep;
+
+            Debug.Log("[BoxTag] continuous row order: diffSameRows=" + keep.ToString("F1") +
+                      " diffFlippedRows=" + flipped.ToString("F1") +
+                      " meanGreen readback=" + meanRaw.ToString("F1") + " single=" + meanSingle.ToString("F1") +
+                      " -> flipRows=" + m_readbackFlipRows +
+                      (inconclusive ? " (inconclusive: kept same rows)" : ""));
+        }
+
+        // Mean |green(raw) - green(single)| over a sparse grid. flippedRows compares raw row y with single row h-1-y.
+        private static double MeanGreenDifference(Color32[] raw, Color32[] single, int w, int h, bool flippedRows)
+        {
+            double sum = 0;
+            int count = 0;
+            for (int y = 0; y < h; y += 4)
+            {
+                int sy = flippedRows ? h - 1 - y : y;
+                for (int x = 0; x < w; x += 4)
+                {
+                    sum += System.Math.Abs(raw[y * w + x].g - single[sy * w + x].g);
+                    count++;
+                }
+            }
+            return count > 0 ? sum / count : double.MaxValue;
+        }
+
+        private static double MeanGreen(Color32[] px, int w, int h)
+        {
+            double sum = 0;
+            int count = 0;
+            for (int y = 0; y < h; y += 4)
+            {
+                for (int x = 0; x < w; x += 4)
+                {
+                    sum += px[y * w + x].g;
+                    count++;
+                }
+            }
+            return count > 0 ? sum / count : 0;
+        }
+
+        private static void FlipRows(Color32[] px, int w, int h)
+        {
+            for (int y = 0; y < h / 2; y++)
+            {
+                int top = y * w;
+                int bottom = (h - 1 - y) * w;
+                for (int x = 0; x < w; x++)
+                {
+                    Color32 t = px[top + x];
+                    px[top + x] = px[bottom + x];
+                    px[bottom + x] = t;
+                }
+            }
+        }
+
+        // Writes a debug PNG in the texture's own row order (the same order the detector receives).
+        private static void SaveDebugPng(Color32[] px, int w, int h, string name)
+        {
+            if (px == null || px.Length < w * h)
+            {
+                return;
+            }
+            try
+            {
+                var tex = new Texture2D(w, h, TextureFormat.RGBA32, false);
+                tex.SetPixels32(px, 0);
+                tex.Apply(false);
+                byte[] png = tex.EncodeToPNG();
+                Destroy(tex);
+
+                string path = System.IO.Path.Combine(Application.persistentDataPath,
+                    "boxtag_" + name + "_" + System.DateTime.Now.ToString("yyyyMMdd_HHmmss") + ".png");
+                System.IO.File.WriteAllBytes(path, png);
+                Debug.Log("[BoxTag] saved debug image: " + path);
+            }
+            catch (System.Exception e)
+            {
+                Debug.LogError("[BoxTag] could not save debug image '" + name + "': " + e.Message);
             }
         }
 

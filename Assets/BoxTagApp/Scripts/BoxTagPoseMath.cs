@@ -197,5 +197,6 @@ namespace BoxTagApp
         public Pose CameraPose;             // MRUK GetCameraPose(); already includes LensOffset
         public BoxTagPoseMath.PixelIntrinsics Intrinsics; // scaled to Width x Height
         public float CopyMs;                // continuous mode: time to copy the GPU readback to managed memory
+        public bool Shown;                  // continuous mode: this frame is on the Captured panel (overlay drawn)
     }
 }
