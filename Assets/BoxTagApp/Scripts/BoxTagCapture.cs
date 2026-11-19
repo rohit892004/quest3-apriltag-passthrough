@@ -59,7 +59,7 @@ namespace BoxTagApp
             {
                 m_labels = gameObject.AddComponent<BoxTagLabels>();
             }
-            m_labels.Initialize(m_layout, m_database);
+            m_labels.Initialize(m_layout, m_database, m_cameraAccess);
         }
 
         private void Update()
@@ -151,6 +151,7 @@ namespace BoxTagApp
             {
                 m_labels.ApplyDetections(frame, results);
             }
+            DrawReprojectionOverlay(results);
 
             if (results.Count == 0)
             {
@@ -196,6 +197,53 @@ namespace BoxTagApp
             {
                 m_layout.SetCapturedTexture(m_capturedTexture);
                 m_layout.SetCapturedAspect((float)frame.Width / frame.Height);
+            }
+        }
+
+        // Draws each tag's detected corners (green) and reprojected corners (red) on the captured image,
+        // so the fit can be seen on the panel. Image pixels are top-down; texture rows are bottom-up.
+        private void DrawReprojectionOverlay(List<TagResult> results)
+        {
+            if (m_capturedTexture == null || results == null || results.Count == 0)
+            {
+                return;
+            }
+
+            int w = m_capturedTexture.width;
+            int h = m_capturedTexture.height;
+            Color32[] px = m_capturedTexture.GetPixels32();
+            var green = new Color32(0, 255, 0, 255);
+            var red = new Color32(255, 0, 0, 255);
+            foreach (TagResult tag in results)
+            {
+                if (tag.Corners == null || tag.ReprojectedCorners == null)
+                {
+                    continue;
+                }
+                for (int i = 0; i < 4; i++)
+                {
+                    MarkPixel(px, w, h, tag.Corners[i], green);
+                    MarkPixel(px, w, h, tag.ReprojectedCorners[i], red);
+                }
+            }
+            m_capturedTexture.SetPixels32(px);
+            m_capturedTexture.Apply();
+        }
+
+        private static void MarkPixel(Color32[] px, int w, int h, Vector2 imagePixel, Color32 color)
+        {
+            int cx = Mathf.RoundToInt(imagePixel.x);
+            int cy = h - 1 - Mathf.RoundToInt(imagePixel.y);
+            for (int dy = -2; dy <= 2; dy++)
+            {
+                for (int dx = -2; dx <= 2; dx++)
+                {
+                    int x = cx + dx, y = cy + dy;
+                    if (x >= 0 && x < w && y >= 0 && y < h)
+                    {
+                        px[y * w + x] = color;
+                    }
+                }
             }
         }
 

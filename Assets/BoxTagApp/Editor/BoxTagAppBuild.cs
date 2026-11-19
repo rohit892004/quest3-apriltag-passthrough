@@ -48,6 +48,7 @@ public static class BoxTagAppBuild
         ("BoxTagDebugGreen", Color.green),
         ("BoxTagDebugBlue", new Color(0.3f, 0.5f, 1f)),
         ("BoxTagDebugWhite", Color.white),
+        ("BoxTagDebugYellow", Color.yellow), // dot when the depth raycast failed (AprilTag pose used)
     };
 
     // Creates or updates the debug materials, and puts their shader in Always Included Shaders,

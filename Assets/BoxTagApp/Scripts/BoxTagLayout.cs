@@ -233,6 +233,15 @@ namespace BoxTagApp
             LayoutRest();
         }
 
+        /// <summary>Shows the label pose mode on the status row (right side, with the build).</summary>
+        public void SetPoseMode(string mode)
+        {
+            if (m_buildText != null)
+            {
+                m_buildText.text = "Pose: " + mode + "   Build " + Application.version;
+            }
+        }
+
         /// <summary>Sets the database status line (bottom-left of the feed).</summary>
         public void SetDatabaseStatus(string text)
         {

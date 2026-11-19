@@ -1,36 +1,44 @@
 // BoxTagLabels.cs
 // L4: a label floats above each real AprilTag and stays on that tag when the user moves.
 //
-// How a tag gets its world pose:
-//   world = CapturedFrame.CameraPose * tagPose
-//   tagPose = BoxTagDetector result, already converted to Unity camera space by
-//             BoxTagPoseMath.ToUnityCameraSpace (the one OpenCV -> Unity conversion).
-//   CameraPose is copied at capture time, so the tag stays where it was seen, not where the head is.
+// Tag position, two modes (Left thumbstick click toggles; default DepthRaycast):
+//   - DepthRaycast (default): the tag-centre pixel of the captured image is turned into a ray with
+//     PassthroughCameraAccess.ViewportPointToRay (using the CAPTURE-TIME camera pose), and the ray is
+//     cast against the environment depth (EnvironmentRaycastManager). The hit point is the tag
+//     position. It does not depend on the tag size setting.
+//     If the raycast fails (no depth, no permission, ray misses), the AprilTag pose is used and the
+//     dot is yellow.
+//   - AprilTagPose: the AprilTag pose only, world = CapturedFrame.CameraPose * tagPose, where the
+//     tagPose comes from BoxTagPoseMath.ToUnityCameraSpace. It depends on the tag size setting.
+//   In both modes the AprilTag pose gives the orientation.
 //
-// Labels:
-//   - One label per tag ID. A new detection moves the existing label smoothly (no jump).
-//   - A tag that is not detected again keeps its label where it was, UNLESS its tag position is
-//     inside the captured image (with a margin) and in front of the camera. Then the tag is
-//     treated as gone (covered, removed, or moved) and its label fades out over FadeSeconds.
-//     A tag outside the captured image keeps its label: you just looked away.
-//   - Label text comes from the database (Gist). Unknown IDs show "ID 5 (not in DB)" in orange.
-//     Text is re-read every frame, so a Left X reload updates existing labels too.
-//   - Labels are world-space canvases that always face the user (billboard), with a dark rounded
-//     background. A thin leader bar runs from the label down to a dot at the tag centre.
+// Stability:
+//   - A new label is placed at its first detection.
+//   - A re-detection moves the label only if the new position differs by more than
+//     MoveThresholdMeters (3 cm). Otherwise it stays put. A move is an eased lerp, not a jump.
+//   - A label whose tag is not detected stays where it was, UNLESS the tag position is inside the
+//     captured image (with a margin) and in front of the camera. Then the label fades out over
+//     FadeSeconds ("[BoxTag] tag N not seen in view -> removed").
 //
-// Visuals use unlit materials loaded with Resources.Load (Resources/BoxTagDebug*.mat). They are
-// created by the APK build step (BoxTagAppBuild), which also puts the shader in Always Included
-// Shaders. Shader.Find is not used at runtime, because a stripped shader gives pink objects.
+// Labels are world-space canvases that always face the user, with a dark rounded background. A thin
+// leader bar runs from the label down to a dot at the tag centre. The label sits LabelHeightMeters
+// above the tag centre, in world up. The labels live under this object, which sits at the world root
+// (identity transform, no parent), not under the camera rig.
+//
+// Visuals use unlit materials loaded with Resources.Load (Resources/BoxTagDebug*.mat), created by the
+// APK build step (BoxTagAppBuild), which also includes the shader in Always Included Shaders.
 //
 // Controls:
 //   - Left Y: show or hide the debug axes on each tag (red = x, green = y, blue = z, 5 cm x 3 mm).
-//   - Right grip, short tap (released in under HoldToClearSeconds): re-place the panels.
+//   - Left thumbstick click: toggle the pose mode (DepthRaycast / AprilTagPose). Shown on the status row.
+//   - Right grip, short tap (under HoldToClearSeconds): re-place the panels.
 //   - Right grip, hold for HoldToClearSeconds: clear all labels.
 //
-// Setup: BoxTagCapture adds this component at runtime and passes in the layout and database.
+// Setup: BoxTagCapture adds this component at runtime and passes in the layout, database and camera.
 // No scene edit or Setup Scene run is needed. The tag size is set on BoxTagDetector (m_tagSizeMeters).
 
 using System.Collections.Generic;
+using Meta.XR;
 using TMPro;
 using UnityEngine;
 using UnityEngine.UI;
@@ -39,7 +47,14 @@ namespace BoxTagApp
 {
     public class BoxTagLabels : MonoBehaviour
     {
+        public enum PoseMode
+        {
+            DepthRaycast,
+            AprilTagPose,
+        }
+
         private const float MmToMetres = 0.001f;
+        private const string ScenePermission = "com.oculus.permission.USE_SCENE";
 
         [Header("Placement (metres)")]
         [Tooltip("Height of the label centre above the tag centre, in world up.")]
@@ -48,7 +63,10 @@ namespace BoxTagApp
         [Tooltip("Distance in metres from the label centre to where the leader bar starts (about the label's bottom edge).")]
         [SerializeField] private float m_leaderStartMeters = 0.018f;
 
-        [Tooltip("How fast a label eases toward a new detection (higher = snappier). Position and rotation both ease.")]
+        [Tooltip("A re-detection moves the label only if the new position differs by more than this (metres).")]
+        [SerializeField] private float m_moveThresholdMeters = 0.03f;
+
+        [Tooltip("How fast a label eases toward its target (higher = snappier).")]
         [SerializeField] private float m_smoothingPerSecond = 8f;
 
         [Header("Debug axes and leader (metres)")]
@@ -95,30 +113,36 @@ namespace BoxTagApp
             public CanvasGroup Fade;
             public TMP_Text Text;
             public GameObject Leader;      // bar from the label down to the tag centre (world space)
+            public Renderer Dot;
             public GameObject[] Axes;      // x, y, z cubes, children of Anchor
-            public Vector3 TargetPosition; // latest detection, world space
+            public Vector3 TargetPosition; // world space
             public Quaternion TargetRotation;
             public string Shown;           // text currently on the label
             public bool Known;
             public bool Fading;
             public float FadeLeft;         // 1 -> 0 while fading
+            public string Mode;            // mode of the last placement: depth, apriltag, apriltag-fallback
         }
 
         private readonly Dictionary<int, TagLabel> m_tags = new Dictionary<int, TagLabel>();
         private BoxTagLayout m_layout;
         private BoxTagDatabase m_database;
-        private Material m_matRed, m_matGreen, m_matBlue, m_matWhite;
+        private PassthroughCameraAccess m_cameraAccess;
+        private EnvironmentRaycastManager m_environmentRaycast;
+        private Material m_matRed, m_matGreen, m_matBlue, m_matWhite, m_matYellow;
         private bool m_axesVisible;
+        private PoseMode m_poseMode = PoseMode.DepthRaycast;
         private float m_gripDownTime = -1f;
         private bool m_gripCleared;
 
         private static Sprite s_roundedSprite;
 
-        /// <summary>Gives the labels the layout (for re-placing on a tap) and the database (for text).</summary>
-        public void Initialize(BoxTagLayout layout, BoxTagDatabase database)
+        /// <summary>Gives the labels the layout, the database (for text) and the camera (for depth rays).</summary>
+        public void Initialize(BoxTagLayout layout, BoxTagDatabase database, PassthroughCameraAccess cameraAccess)
         {
             m_layout = layout;
             m_database = database;
+            m_cameraAccess = cameraAccess;
         }
 
         private void Awake()
@@ -127,6 +151,29 @@ namespace BoxTagApp
             m_matGreen = LoadDebugMaterial("BoxTagDebugGreen");
             m_matBlue = LoadDebugMaterial("BoxTagDebugBlue");
             m_matWhite = LoadDebugMaterial("BoxTagDebugWhite");
+            m_matYellow = LoadDebugMaterial("BoxTagDebugYellow");
+
+            // Environment depth stays off until the user grants USE_SCENE at runtime. The manifest
+            // declares it, but Horizon OS needs the runtime request (the "EnvDepth=0" cause).
+#if UNITY_ANDROID
+            if (!UnityEngine.Android.Permission.HasUserAuthorizedPermission(ScenePermission))
+            {
+                UnityEngine.Android.Permission.RequestUserPermission(ScenePermission);
+                Debug.Log("[BoxTag] requesting permission " + ScenePermission + " (needed for environment depth)");
+            }
+#endif
+
+            // The raycast manager also adds and enables EnvironmentDepthManager.
+            var raycastGo = new GameObject("BoxTagEnvironmentRaycast");
+            raycastGo.transform.SetParent(transform, false);
+            m_environmentRaycast = raycastGo.AddComponent<EnvironmentRaycastManager>();
+            Debug.Log("[BoxTag] environment depth supported=" + EnvironmentRaycastManager.IsSupported +
+                      " pose mode=" + PoseModeName(m_poseMode));
+
+            if (m_layout != null)
+            {
+                m_layout.SetPoseMode(PoseModeName(m_poseMode));
+            }
         }
 
         /// <summary>
@@ -147,27 +194,55 @@ namespace BoxTagApp
             {
                 seen.Add(result.Id);
 
-                // Tag pose in world space: capture-time camera pose x tag pose (camera space).
-                Vector3 tagPosition = TagToWorldPosition(frame.CameraPose, result.Position);
-                Quaternion tagRotation = frame.CameraPose.rotation * result.Rotation;
-                float distance = Vector3.Distance(tagPosition, cameraPosition);
+                // AprilTag pose in world space: capture-time camera pose x tag pose (camera space).
+                Vector3 aprilPosition = TagToWorldPosition(frame.CameraPose, result.Position);
+                Quaternion aprilRotation = frame.CameraPose.rotation * result.Rotation;
 
-                Debug.Log("[BoxTag] tag ID=" + result.Id + " world=" + tagPosition.ToString("F3") +
-                          " distance=" + distance.ToString("F2") + " m (from capture camera)");
+                // Position: depth raycast by default, the AprilTag pose as the fallback.
+                Vector3 position = aprilPosition;
+                string mode = "apriltag";
+                bool fallback = false;
+                if (m_poseMode == PoseMode.DepthRaycast)
+                {
+                    if (TryDepthPoint(frame, result.Center, out Vector3 depthPosition))
+                    {
+                        position = depthPosition;
+                        mode = "depth";
+                    }
+                    else
+                    {
+                        mode = "apriltag-fallback";
+                        fallback = true;
+                    }
+                }
+
+                float distance = Vector3.Distance(position, cameraPosition);
+                Debug.Log("[BoxTag] tag " + result.Id + " mode=" + mode +
+                          " pixel=(" + result.Center.x.ToString("F1") + "," + result.Center.y.ToString("F1") + ")" +
+                          " world=(" + position.x.ToString("F3") + "," + position.y.ToString("F3") + "," + position.z.ToString("F3") + ")" +
+                          " dist=" + distance.ToString("F2") + " m reprojErr=" + result.ReprojErrPx.ToString("F2") + " px");
 
                 if (!m_tags.TryGetValue(result.Id, out TagLabel tag))
                 {
                     tag = CreateLabel(result.Id);
                     // First sighting: appear at the tag, do not fly in from the origin.
-                    tag.Anchor.transform.SetPositionAndRotation(tagPosition, tagRotation);
+                    tag.Anchor.transform.SetPositionAndRotation(position, aprilRotation);
+                    tag.TargetPosition = position;
+                    tag.TargetRotation = aprilRotation;
                     m_tags[result.Id] = tag;
+                }
+                else if (Vector3.Distance(position, tag.TargetPosition) > m_moveThresholdMeters)
+                {
+                    // Moved by more than the threshold: follow it (eased in Update). Otherwise hold still.
+                    tag.TargetPosition = position;
+                    tag.TargetRotation = aprilRotation;
                 }
 
                 // Seen again while fading: bring it back.
                 tag.Fading = false;
                 tag.FadeLeft = 1f;
-                tag.TargetPosition = tagPosition;
-                tag.TargetRotation = tagRotation;
+                tag.Mode = mode;
+                tag.Dot.sharedMaterial = fallback ? m_matYellow : m_matWhite;
                 RefreshText(tag);
             }
 
@@ -201,6 +276,7 @@ namespace BoxTagApp
         private void Update()
         {
             HandleLeftY();
+            HandleThumbstick();
             HandleRightGrip();
 
             if (m_tags.Count == 0)
@@ -230,7 +306,7 @@ namespace BoxTagApp
                     s = Mathf.Clamp01(tag.FadeLeft);
                 }
 
-                // Ease toward the latest detection.
+                // Ease toward the target (only changes on a re-detection that moved > threshold).
                 Transform anchor = tag.Anchor.transform;
                 anchor.position = Vector3.Lerp(anchor.position, tag.TargetPosition, ease);
                 anchor.rotation = Quaternion.Slerp(anchor.rotation, tag.TargetRotation, ease);
@@ -272,6 +348,26 @@ namespace BoxTagApp
                     m_tags.Remove(id);
                 }
             }
+        }
+
+        // Depth position of a tag-centre pixel: ray from the capture-time pose, cast into the environment depth.
+        // centre is in image pixels (OpenCV: origin top-left). The viewport origin is bottom-left.
+        private bool TryDepthPoint(CapturedFrame frame, Vector2 centerTopDown, out Vector3 point)
+        {
+            point = default;
+            if (m_cameraAccess == null || m_environmentRaycast == null || !EnvironmentRaycastManager.IsSupported)
+            {
+                return false;
+            }
+
+            var viewport = new Vector2(centerTopDown.x / frame.Width, 1f - centerTopDown.y / frame.Height);
+            Ray ray = m_cameraAccess.ViewportPointToRay(viewport, frame.CameraPose);
+            if (m_environmentRaycast.Raycast(ray, out EnvironmentRaycastHit hit))
+            {
+                point = hit.point;
+                return true;
+            }
+            return false;
         }
 
         // Camera-space tag position -> world: cam.position + cam.rotation * p.
@@ -335,6 +431,24 @@ namespace BoxTagApp
             }
         }
 
+        private void HandleThumbstick()
+        {
+            if (OVRInput.GetDown(OVRInput.Button.PrimaryThumbstick))
+            {
+                m_poseMode = m_poseMode == PoseMode.DepthRaycast ? PoseMode.AprilTagPose : PoseMode.DepthRaycast;
+                Debug.Log("[BoxTag] pose mode = " + PoseModeName(m_poseMode) + " (applies to the next capture)");
+                if (m_layout != null)
+                {
+                    m_layout.SetPoseMode(PoseModeName(m_poseMode));
+                }
+            }
+        }
+
+        private static string PoseModeName(PoseMode mode)
+        {
+            return mode == PoseMode.DepthRaycast ? "DepthRaycast" : "AprilTagPose";
+        }
+
         private void HandleRightGrip()
         {
             if (OVRInput.GetDown(OVRInput.Button.SecondaryHandTrigger))
@@ -377,6 +491,7 @@ namespace BoxTagApp
 
             GameObject dot = MakeCube(PrimitiveType.Sphere, tag.Anchor.transform, "Dot", m_matWhite);
             dot.transform.localScale = Vector3.one * m_dotSizeMeters;
+            tag.Dot = dot.GetComponent<Renderer>();
 
             float len = m_axisLengthMeters;
             float t = m_barThicknessMeters;

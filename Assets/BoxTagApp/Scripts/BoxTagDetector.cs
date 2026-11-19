@@ -27,6 +27,12 @@ namespace BoxTagApp
         public float DecisionMargin;
         public Vector3 Position;   // tag origin in camera space, metres
         public Quaternion Rotation; // tag orientation in camera space
+
+        // Image pixels of the captured image, OpenCV convention (origin top-left, y down).
+        public Vector2 Center;
+        public Vector2[] Corners;            // detected corners
+        public Vector2[] ReprojectedCorners; // tag corners projected with Position/Rotation and the intrinsics
+        public float ReprojErrPx;            // mean corner error, pixels
     }
 
     public class BoxTagDetector : MonoBehaviour
@@ -147,6 +153,17 @@ namespace BoxTagApp
 
                             BoxTagPoseMath.ToUnityCameraSpace(r, t, out Vector3 position, out Quaternion rotation);
 
+                            // Reprojection check in image pixels (same convention as the intrinsics k).
+                            var detected = new Vector2[]
+                            {
+                                new Vector2((float)detections[i].Corner1.x, (float)detections[i].Corner1.y),
+                                new Vector2((float)detections[i].Corner2.x, (float)detections[i].Corner2.y),
+                                new Vector2((float)detections[i].Corner3.x, (float)detections[i].Corner3.y),
+                                new Vector2((float)detections[i].Corner4.x, (float)detections[i].Corner4.y),
+                            };
+                            float reprojError = BoxTagPoseMath.ReprojectionError(r, t, k, tagSize, detected, out Vector2[] reprojected);
+                            (double cx, double cy) = detections[i].Center;
+
                             results.Add(new TagResult
                             {
                                 Id = id,
@@ -154,6 +171,10 @@ namespace BoxTagApp
                                 DecisionMargin = margin,
                                 Position = position,
                                 Rotation = rotation,
+                                Center = new Vector2((float)cx, (float)cy),
+                                Corners = detected,
+                                ReprojectedCorners = reprojected,
+                                ReprojErrPx = reprojError,
                             });
                         }
                     }

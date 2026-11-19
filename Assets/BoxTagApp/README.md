@@ -82,11 +82,19 @@ Labels re-read the database each frame, so a left X reload also updates existing
 |---|---|
 | Right A / right trigger | Capture and detect (unchanged). |
 | Left Y | Show or hide debug axes on each tag (red x, green y, blue z). |
+| Left thumbstick click | Toggle pose mode: `DepthRaycast` (default) / `AprilTagPose`. Shown on the status row. Applies to the next capture. |
 | Right grip, short tap | Re-place the panels in front of the head. |
 | Right grip, hold 1 s | Clear all labels. |
 | Left X | Reload the database (unchanged). |
 
-Log lines: `[BoxTag] tag ID=<id> world=(x, y, z) distance=<m> m (from capture camera)`.
+Log lines per capture: `[BoxTag] tag <id> mode=<depth|apriltag|apriltag-fallback> pixel=(u,v) world=(x,y,z) dist=<m> m reprojErr=<px> px`.
+
+**Reprojection check:** the captured image shows each tag's detected corners in green and the corners
+reprojected from the AprilTag pose in red. A good fit is about 1 px or less. Large red/green offsets mean
+the pose or the intrinsics are wrong.
+
+**Depth mode** needs the `com.oculus.permission.USE_SCENE` permission. The app asks for it on first launch.
+Without it, environment depth stays off and the label uses the AprilTag pose (`apriltag-fallback`, yellow dot).
 
 ## Layout settings (tweak in the Inspector, no code change)
 
