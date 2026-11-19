@@ -4,7 +4,7 @@ Quest 3 app that reads AprilTags from the passthrough camera and shows labels fr
 Own code lives only in `Assets/BoxTagApp/`. The AprilTag library (`Assets/AprilTag/`) and the
 sample code (`Assets/PassthroughCameraApiSamples/`) are referenced or left unchanged.
 
-App identity: product name `BoxTag App`, Android package `com.assignment.boxtagapp`
+App identity: product name `BoxTag App`, Android package `com.asas.boxtagapp`
 (a **placeholder**). Change `AndroidPackageName` in `Editor/BoxTagAppBuild.cs` to your own name.
 
 ## Status
@@ -66,7 +66,7 @@ Set by the Setup Scene script, copied from the sample `CameraViewer.unity`:
    Output: `Builds/BoxTagApp_L2.apk`. Success line: `[BoxTagAppBuild] SUCCESS`.
    The build refuses unless exactly `BoxTagApp` is enabled in Build Settings.
 4. Install: `npx -y @meta-quest/hzdb app install -r Builds/BoxTagApp_L2.apk`
-5. Launch: `npx -y @meta-quest/hzdb app launch com.assignment.boxtagapp`
+5. Launch: `npx -y @meta-quest/hzdb app launch com.asas.boxtagapp`
 
 ## Headset test (L2)
 

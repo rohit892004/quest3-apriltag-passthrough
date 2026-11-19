@@ -22,7 +22,7 @@ public static class BoxTagAppBuild
     // App identity. PLACEHOLDER package name: change "assignment" to your own name, e.g.
     // "com.yourname.boxtagapp". This is the only place to change it. Changing it installs a
     // separate app (it does not replace com.samples.passthroughcamera).
-    private const string AndroidPackageName = "com.assignment.boxtagapp";
+    private const string AndroidPackageName = "com.asas.boxtagapp";
     private const string ProductName = "BoxTag App";
 
     [MenuItem("Tools/BoxTagApp/Build APK")]
