@@ -56,6 +56,9 @@ namespace BoxTagApp
         /// <summary>True while a detection job is running on the worker thread.</summary>
         public bool IsBusy { get; private set; }
 
+        /// <summary>Worker-thread time of the last detection job, in ms (set on the main thread).</summary>
+        public float LastDetectionMs { get; private set; }
+
         /// <summary>Tag size in metres used for the next job (read by the main thread for display).</summary>
         public float TagSizeMeters => m_tagSizeMeters;
 
@@ -95,6 +98,7 @@ namespace BoxTagApp
             {
                 List<TagResult> results = null;
                 string error = null;
+                var stopwatch = System.Diagnostics.Stopwatch.StartNew();
                 try
                 {
                     results = RunDetection(frame, tagSize);
@@ -103,10 +107,12 @@ namespace BoxTagApp
                 {
                     error = e.ToString();
                 }
+                float detectMs = (float)stopwatch.Elapsed.TotalMilliseconds;
 
                 m_mainThreadQueue.Enqueue(() =>
                 {
                     IsBusy = false;
+                    LastDetectionMs = detectMs;
                     if (error != null)
                     {
                         Debug.LogError("[BoxTag] Detection failed: " + error);

@@ -99,6 +99,9 @@ namespace BoxTagApp
         [Tooltip("A tag inside the captured image by at least this many pixels, and not detected, loses its label.")]
         [SerializeField] private float m_viewMarginPx = 16f;
 
+        [Tooltip("Continuous mode: a tag in view and undetected for this many seconds loses its label.")]
+        [SerializeField] private float m_continuousRemoveSeconds = 1f;
+
         [Tooltip("Seconds a label takes to fade out when its tag is gone.")]
         [SerializeField] private float m_fadeSeconds = 0.3f;
 
@@ -122,6 +125,7 @@ namespace BoxTagApp
             public bool Fading;
             public float FadeLeft;         // 1 -> 0 while fading
             public string Mode;            // mode of the last placement: depth, apriltag, apriltag-fallback
+            public float LastSeen;         // Time.realtimeSinceStartup of the last detection
         }
 
         private readonly Dictionary<int, TagLabel> m_tags = new Dictionary<int, TagLabel>();
@@ -181,7 +185,7 @@ namespace BoxTagApp
         /// capture but was not detected. Called on the main thread after detection.
         /// frame.CameraPose and frame.Intrinsics are the capture-time values, so the result is consistent.
         /// </summary>
-        public void ApplyDetections(CapturedFrame frame, List<TagResult> results)
+        public void ApplyDetections(CapturedFrame frame, List<TagResult> results, bool continuous)
         {
             if (frame == null || results == null)
             {
@@ -241,6 +245,7 @@ namespace BoxTagApp
                 // Seen again while fading: bring it back.
                 tag.Fading = false;
                 tag.FadeLeft = 1f;
+                tag.LastSeen = Time.realtimeSinceStartup;
                 tag.Mode = mode;
                 tag.Dot.sharedMaterial = fallback ? m_matYellow : m_matWhite;
                 RefreshText(tag);
@@ -250,6 +255,11 @@ namespace BoxTagApp
             foreach (TagLabel tag in m_tags.Values)
             {
                 if (tag.Fading || seen.Contains(tag.Id))
+                {
+                    continue;
+                }
+                // Continuous mode: only after the tag has been missing for a while (covers a missed frame).
+                if (continuous && Time.realtimeSinceStartup - tag.LastSeen < m_continuousRemoveSeconds)
                 {
                     continue;
                 }

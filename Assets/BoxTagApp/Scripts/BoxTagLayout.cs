@@ -113,6 +113,8 @@ namespace BoxTagApp
         private TMP_Text m_databaseText;
         private TMP_Text m_buildText;
         private TMP_Text[] m_resultRows;
+        private string m_poseModeText = "DepthRaycast";
+        private bool m_continuousOn;
 
         private float m_feedAspect = DefaultAspect;
         private float m_capturedAspect = DefaultAspect;
@@ -145,7 +147,7 @@ namespace BoxTagApp
             ApplyImageHeight(m_feedImageSlot, m_feedRoot, m_feedAspect);
             ApplyImageHeight(m_capturedImageSlot, m_capturedRoot, m_capturedAspect);
 
-            m_buildText.text = "Build " + Application.version;
+            RefreshBuildText();
             SetDatabaseStatus("DB: starting");
             SetResults("Press A or right trigger to capture");
             LayoutRest();
@@ -236,9 +238,24 @@ namespace BoxTagApp
         /// <summary>Shows the label pose mode on the status row (right side, with the build).</summary>
         public void SetPoseMode(string mode)
         {
+            m_poseModeText = mode;
+            RefreshBuildText();
+        }
+
+        /// <summary>Shows Continuous: ON/OFF on the status row (right side).</summary>
+        public void SetContinuous(bool on)
+        {
+            m_continuousOn = on;
+            RefreshBuildText();
+        }
+
+        // Status row, right side: "Continuous: ON   Pose: DepthRaycast   Build <version>".
+        private void RefreshBuildText()
+        {
             if (m_buildText != null)
             {
-                m_buildText.text = "Pose: " + mode + "   Build " + Application.version;
+                m_buildText.text = "Continuous: " + (m_continuousOn ? "ON" : "OFF") +
+                                   "   Pose: " + m_poseModeText + "   Build " + Application.version;
             }
         }
 

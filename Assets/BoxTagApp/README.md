@@ -81,6 +81,8 @@ Labels re-read the database each frame, so a left X reload also updates existing
 | Control | Action |
 |---|---|
 | Right A / right trigger | Capture and detect (unchanged). |
+| Right B | Toggle **Continuous** mode (shown on the status row). |
+| Right A / trigger | Single capture. Ignored while Continuous is ON. |
 | Left Y | Show or hide debug axes on each tag (red x, green y, blue z). |
 | Left thumbstick click | Toggle pose mode: `DepthRaycast` (default) / `AprilTagPose`. Shown on the status row. Applies to the next capture. |
 | Right grip, short tap | Re-place the panels in front of the head. |
@@ -88,6 +90,15 @@ Labels re-read the database each frame, so a left X reload also updates existing
 | Left X | Reload the database (unchanged). |
 
 Log lines per capture: `[BoxTag] tag <id> mode=<depth|apriltag|apriltag-fallback> pixel=(u,v) world=(x,y,z) dist=<m> m reprojErr=<px> px`.
+
+**Continuous mode (right B, bonus):** about 5 detections per second.
+- The camera texture is read back with `AsyncGPUReadback`. The frame never waits for the GPU.
+- Only one readback and one detection run at a time. Detection runs on the worker thread.
+- Each detection logs `[BoxTag] continuous: detect=<ms> ms copy=<ms> ms tags=<n>`. `detect` is the worker time, and `copy` is the main-thread copy of the readback.
+- A label is removed when its tag is in the current view and has not been detected for about 1 s
+  (`Continuous Remove Seconds`). A single capture still removes at once.
+- If the camera texture does not support readback, continuous mode stops after 3 errors and logs why.
+- Not done: **tagStandard52h13**. It needs a native library rebuild, so only tag36h11 is detected.
 
 **Reprojection check:** the captured image shows each tag's detected corners in green and the corners
 reprojected from the AprilTag pose in red. A good fit is about 1 px or less. Large red/green offsets mean

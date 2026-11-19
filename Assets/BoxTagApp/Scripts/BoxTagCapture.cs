@@ -26,6 +26,7 @@ using System.Collections.Generic;
 using Meta.XR;
 using Unity.Collections;
 using UnityEngine;
+using UnityEngine.Rendering;
 
 namespace BoxTagApp
 {
@@ -64,6 +65,19 @@ namespace BoxTagApp
 
         private void Update()
         {
+            // Right B: toggle continuous mode.
+            if (OVRInput.GetDown(OVRInput.Button.Two))
+            {
+                ToggleContinuous();
+            }
+
+            // In continuous mode the readbacks drive detection; A and the trigger do nothing.
+            if (m_continuous)
+            {
+                UpdateContinuous();
+                return;
+            }
+
             bool pressed = OVRInput.GetDown(OVRInput.Button.One) ||
                            OVRInput.GetDown(OVRInput.Button.SecondaryIndexTrigger);
             if (pressed)
@@ -134,11 +148,11 @@ namespace BoxTagApp
             ShowCapturedFrame(frame);
             SetText("Detecting...");
 
-            m_detector.Submit(frame, results => OnDetectionDone(frame, results));
+            m_detector.Submit(frame, results => OnDetectionDone(frame, results, false));
         }
 
         // Runs on the MAIN thread when the worker finishes.
-        private void OnDetectionDone(CapturedFrame frame, List<TagResult> results)
+        private void OnDetectionDone(CapturedFrame frame, List<TagResult> results, bool continuous)
         {
             if (results == null)
             {
@@ -146,10 +160,16 @@ namespace BoxTagApp
                 return;
             }
 
+            if (continuous)
+            {
+                Debug.Log("[BoxTag] continuous: detect=" + m_detector.LastDetectionMs.ToString("F1") +
+                          " ms copy=" + frame.CopyMs.ToString("F1") + " ms tags=" + results.Count);
+            }
+
             // L4: one label per tag, placed with the capture-time camera pose.
             if (m_labels != null)
             {
-                m_labels.ApplyDetections(frame, results);
+                m_labels.ApplyDetections(frame, results, continuous);
             }
             DrawReprojectionOverlay(results);
 
@@ -197,6 +217,119 @@ namespace BoxTagApp
             {
                 m_layout.SetCapturedTexture(m_capturedTexture);
                 m_layout.SetCapturedAspect((float)frame.Width / frame.Height);
+            }
+        }
+
+        // ---- Continuous mode (right B) -------------------------------------------------------
+        // Non-blocking: AsyncGPUReadback fetches the camera texture while the frame keeps running.
+        // One readback and one detection are in flight at a time, about 5 per second. The pose and
+        // intrinsics are read when the readback is requested, so they match the pixels.
+
+        private const float ContinuousIntervalSeconds = 0.2f; // about 5 per second
+        private const int MaxReadbackErrors = 3;
+
+        private bool m_continuous;
+        private bool m_readbackInFlight;
+        private float m_nextRequestTime;
+        private int m_readbackErrors;
+
+        private void ToggleContinuous()
+        {
+            m_continuous = !m_continuous;
+            m_readbackErrors = 0;
+            m_nextRequestTime = 0f;
+            if (m_layout != null)
+            {
+                m_layout.SetContinuous(m_continuous);
+            }
+            Debug.Log(m_continuous ? "[BoxTag] Continuous: ON" : "[BoxTag] Continuous: OFF");
+        }
+
+        private void UpdateContinuous()
+        {
+            if (m_readbackInFlight || m_detector.IsBusy || Time.realtimeSinceStartup < m_nextRequestTime)
+            {
+                return;
+            }
+            if (m_cameraAccess == null || !m_cameraAccess.IsPlaying)
+            {
+                return;
+            }
+
+            Texture source = m_cameraAccess.GetTexture();
+            if (source == null)
+            {
+                return;
+            }
+
+            // Capture-time values for the frame that is about to be read back.
+            var intrinsics = m_cameraAccess.Intrinsics;
+            BoxTagPoseMath.PixelIntrinsics scaled = BoxTagPoseMath.ScaleIntrinsics(
+                intrinsics.FocalLength,
+                intrinsics.PrincipalPoint,
+                intrinsics.SensorResolution,
+                new Vector2Int(source.width, source.height),
+                out _,
+                out _);
+
+            var frame = new CapturedFrame
+            {
+                Width = source.width,
+                Height = source.height,
+                Timestamp = m_cameraAccess.Timestamp,
+                CameraPose = m_cameraAccess.GetCameraPose(),
+                Intrinsics = scaled,
+            };
+
+            m_readbackInFlight = true;
+            m_nextRequestTime = Time.realtimeSinceStartup + ContinuousIntervalSeconds;
+            AsyncGPUReadback.Request(source, 0, TextureFormat.RGBA32, request => OnReadbackDone(request, frame));
+        }
+
+        // Runs on the main thread when the GPU has the pixels. Copies them, then starts detection.
+        private void OnReadbackDone(AsyncGPUReadbackRequest request, CapturedFrame frame)
+        {
+            m_readbackInFlight = false;
+
+            if (request.hasError)
+            {
+                m_readbackErrors++;
+                Debug.LogError("[BoxTag] continuous readback failed (" + m_readbackErrors + "/" + MaxReadbackErrors + ")");
+                if (m_readbackErrors >= MaxReadbackErrors)
+                {
+                    m_continuous = false;
+                    if (m_layout != null)
+                    {
+                        m_layout.SetContinuous(false);
+                    }
+                    SetText("Continuous stopped: readback failed");
+                    Debug.LogError("[BoxTag] Continuous: OFF (readback not available on this camera texture)");
+                }
+                return;
+            }
+
+            // Turned off while this readback was running.
+            if (!m_continuous)
+            {
+                return;
+            }
+            m_readbackErrors = 0;
+
+            var stopwatch = System.Diagnostics.Stopwatch.StartNew();
+            NativeArray<Color32> data = request.GetData<Color32>();
+            // Copy now: the readback buffer is released when this callback returns.
+            Color32[] pixels = data.ToArray();
+            frame.CopyMs = (float)stopwatch.Elapsed.TotalMilliseconds;
+            if (pixels.Length < frame.Width * frame.Height)
+            {
+                return;
+            }
+            frame.Pixels = pixels;
+
+            ShowCapturedFrame(frame);
+            if (!m_detector.Submit(frame, results => OnDetectionDone(frame, results, true)))
+            {
+                Debug.Log("[BoxTag] continuous: detector busy, frame skipped");
             }
         }
 
