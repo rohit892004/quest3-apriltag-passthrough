@@ -6,7 +6,7 @@
 //   Unity.exe -batchmode -nographics -quit -projectPath <project> ^
 //     -executeMethod BoxTagAppBuild.BuildApkHeadless -logFile <log>
 //
-// Output: Builds/BoxTagApp_L4.apk (Builds/ is git-ignored).
+// Output: Builds/BoxTagApp_Final.apk (Builds/ is git-ignored). Release build, app name "BoxTag App".
 
 using System.IO;
 using System.Linq;
@@ -17,7 +17,7 @@ using UnityEngine;
 public static class BoxTagAppBuild
 {
     private const string BoxTagScene = "Assets/BoxTagApp/Scene/BoxTagApp.unity";
-    private const string ApkPath = "Builds/BoxTagApp_L4.apk";
+    private const string ApkPath = "Builds/BoxTagApp_Final.apk";
 
     // App identity. PLACEHOLDER package name: change "assignment" to your own name, e.g.
     // "com.yourname.boxtagapp". This is the only place to change it. Changing it installs a
@@ -146,8 +146,8 @@ public static class BoxTagAppBuild
             locationPathName = ApkPath,
             target = BuildTarget.Android,
             targetGroup = BuildTargetGroup.Android,
-            // Development build: keeps Debug.Log and logcat output so the L2+ tests can be checked.
-            options = BuildOptions.Development,
+            // Release build (not Development): no development connection, no script debugging.
+            options = BuildOptions.None,
         };
 
         BuildReport report = BuildPipeline.BuildPlayer(options);

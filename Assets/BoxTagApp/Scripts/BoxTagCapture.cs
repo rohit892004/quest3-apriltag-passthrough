@@ -25,7 +25,8 @@
 // its aspect, and the ID text.
 //
 // Feedback on capture: a short beep and a brief white flash of the captured-frame panel.
-// Debug PNGs are written to Application.persistentDataPath (paths are logged).
+// Left Y toggles the debug view (tag axes and reprojection corners). It is OFF by default.
+// No files are written to disk.
 //
 // Camera ownership: this script only reads from the MRUK PassthroughCameraAccess component.
 
@@ -57,6 +58,7 @@ namespace BoxTagApp
         [SerializeField] private float m_previewFps = 2f;
 
         private Texture2D m_capturedTexture;
+        private bool m_debugVisuals; // Left Y: tag axes and reprojection corners (OFF by default)
         private AudioSource m_audio;
         private AudioClip m_beep;
         private BoxTagLabels m_labels;
@@ -79,7 +81,18 @@ namespace BoxTagApp
 
         private void Update()
         {
-            // Right B: toggle continuous mode.
+            // Left Y: debug view (tag axes and reprojection corners). OFF by default.
+            if (OVRInput.GetDown(OVRInput.Button.Four))
+            {
+                m_debugVisuals = !m_debugVisuals;
+                if (m_labels != null)
+                {
+                    m_labels.SetDebugVisible(m_debugVisuals);
+                }
+                Debug.Log(m_debugVisuals ? "[BoxTag] Debug ON (tag axes, reprojection corners)" : "[BoxTag] Debug OFF");
+            }
+
+            // Right B: toggle continuous mode (beta).
             if (OVRInput.GetDown(OVRInput.Button.Two))
             {
                 ToggleContinuous();
@@ -159,12 +172,6 @@ namespace BoxTagApp
                 " camPos=" + frame.CameraPose.position.ToString("F3") +
                 " camRot=" + frame.CameraPose.rotation.eulerAngles.ToString("F1"));
 
-            if (!m_savedSingleFrame)
-            {
-                m_savedSingleFrame = true;
-                SaveDebugPng(pixels, res.x, res.y, "single");
-            }
-
             PlayCaptureFeedback();
             ShowCapturedFrame(frame);
             SetText("Detecting...");
@@ -193,8 +200,8 @@ namespace BoxTagApp
                 m_labels.ApplyDetections(frame, results, continuous);
             }
 
-            // The overlay goes on the image only when this frame is the one on the panel.
-            if (!continuous || frame.Shown)
+            // Debug overlay (Left Y) goes on the image only when this frame is the one on the panel.
+            if (m_debugVisuals && (!continuous || frame.Shown))
             {
                 DrawReprojectionOverlay(results);
             }
@@ -263,16 +270,13 @@ namespace BoxTagApp
         private bool m_needCalibration;
         private bool m_readbackFlipRows;
         private float m_lastPreviewTime = -1f;
-        private bool m_savedSingleFrame;
-        private bool m_savedContinuousFrame;
 
         private void ToggleContinuous()
         {
             m_continuous = !m_continuous;
             m_readbackErrors = 0;
             m_nextRequestTime = 0f;
-            m_needCalibration = m_continuous;   // re-measure the row order each time continuous turns on
-            m_savedContinuousFrame = false;
+            m_needCalibration = m_continuous;   // measured once per B press, on the first request
             if (m_layout != null)
             {
                 m_layout.SetContinuous(m_continuous);
@@ -326,6 +330,7 @@ namespace BoxTagApp
                 if (colors.IsCreated && colors.Length >= n)
                 {
                     singleOrder = colors.GetSubArray(0, n).ToArray();
+                    m_needCalibration = false; // done for this B press
                 }
                 else
                 {
@@ -382,8 +387,6 @@ namespace BoxTagApp
             if (singleOrder != null)
             {
                 DecideRowOrder(raw, singleOrder, frame.Width, frame.Height);
-                SaveDebugPng(raw, frame.Width, frame.Height, "continuous-raw-calibration");
-                SaveDebugPng(singleOrder, frame.Width, frame.Height, "single-order-calibration");
             }
 
             bool flip = m_continuousRowOrder == 1 || (m_continuousRowOrder == 0 && m_readbackFlipRows);
@@ -392,12 +395,6 @@ namespace BoxTagApp
                 FlipRows(raw, frame.Width, frame.Height);
             }
             frame.Pixels = raw;
-
-            if (!m_savedContinuousFrame)
-            {
-                m_savedContinuousFrame = true;
-                SaveDebugPng(raw, frame.Width, frame.Height, "continuous");
-            }
 
             // Preview on the captured panel at a fixed rate; detection still runs on every frame.
             float previewInterval = 1f / Mathf.Max(0.1f, m_previewFps);
@@ -477,32 +474,6 @@ namespace BoxTagApp
                     px[top + x] = px[bottom + x];
                     px[bottom + x] = t;
                 }
-            }
-        }
-
-        // Writes a debug PNG in the texture's own row order (the same order the detector receives).
-        private static void SaveDebugPng(Color32[] px, int w, int h, string name)
-        {
-            if (px == null || px.Length < w * h)
-            {
-                return;
-            }
-            try
-            {
-                var tex = new Texture2D(w, h, TextureFormat.RGBA32, false);
-                tex.SetPixels32(px, 0);
-                tex.Apply(false);
-                byte[] png = tex.EncodeToPNG();
-                Destroy(tex);
-
-                string path = System.IO.Path.Combine(Application.persistentDataPath,
-                    "boxtag_" + name + "_" + System.DateTime.Now.ToString("yyyyMMdd_HHmmss") + ".png");
-                System.IO.File.WriteAllBytes(path, png);
-                Debug.Log("[BoxTag] saved debug image: " + path);
-            }
-            catch (System.Exception e)
-            {
-                Debug.LogError("[BoxTag] could not save debug image '" + name + "': " + e.Message);
             }
         }
 

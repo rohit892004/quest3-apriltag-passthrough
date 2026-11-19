@@ -38,6 +38,7 @@ namespace BoxTagApp
     {
         private const float MmToMetres = 0.001f;
         private const float DefaultAspect = 4f / 3f;
+        private const string ControlsHelpText = "A: Capture  X: Reload DB  Y: Debug  B: Continuous (beta)  Grip: Move panels";
 
         [Header("Placement (metres)")]
         [Tooltip("Width of the live feed panel in metres. Its height follows the content.")]
@@ -80,6 +81,9 @@ namespace BoxTagApp
 
         [Tooltip("Status size: \"DB: ...\" and \"Build ...\".")]
         [SerializeField] private float m_statusFontSize = 7f;
+
+        [Tooltip("Size of the controls help line at the bottom of the feed panel.")]
+        [SerializeField] private float m_helpFontSize = 5f;
 
         [Tooltip("Most result lines shown. If there are more tags, the last line says \"+N more\".")]
         [SerializeField] private int m_maxResultLines = 5;
@@ -137,6 +141,7 @@ namespace BoxTagApp
             AddText(m_feedRoot, "FeedTitle", m_titleFontSize, TextAlignmentOptions.Left).text = "Live camera";
             m_feedImage = AddImageRow(m_feedRoot, "FeedImage", out m_feedImageSlot, out _);
             AddStatusRow(m_feedRoot);
+            AddText(m_feedRoot, "ControlsHelp", m_helpFontSize, TextAlignmentOptions.Left).text = ControlsHelpText;
 
             // Captured panel: title, captured image (with flash overlay), results list.
             m_capturedRoot = CreateRoot("BoxTagCapturedPanel", m_capturedWidthMeters * 1000f);
@@ -254,7 +259,7 @@ namespace BoxTagApp
         {
             if (m_buildText != null)
             {
-                m_buildText.text = "Continuous: " + (m_continuousOn ? "ON" : "OFF") +
+                m_buildText.text = "Continuous (beta): " + (m_continuousOn ? "ON" : "OFF") +
                                    "   Pose: " + m_poseModeText + "   Build " + Application.version;
             }
         }

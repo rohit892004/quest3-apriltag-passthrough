@@ -29,7 +29,8 @@
 // APK build step (BoxTagAppBuild), which also includes the shader in Always Included Shaders.
 //
 // Controls:
-//   - Left Y: show or hide the debug axes on each tag (red = x, green = y, blue = z, 5 cm x 3 mm).
+//   - Left Y (handled by BoxTagCapture): debug axes on each tag (red = x, green = y, blue = z, 5 cm x 3 mm).
+//     OFF by default.
 //   - Left thumbstick click: toggle the pose mode (DepthRaycast / AprilTagPose). Shown on the status row.
 //   - Right grip, short tap (under HoldToClearSeconds): re-place the panels.
 //   - Right grip, hold for HoldToClearSeconds: clear all labels.
@@ -283,9 +284,21 @@ namespace BoxTagApp
             Debug.Log("[BoxTag] All labels cleared.");
         }
 
+        /// <summary>Shows or hides the tag axes (Left Y, through BoxTagCapture). OFF by default.</summary>
+        public void SetDebugVisible(bool visible)
+        {
+            m_axesVisible = visible;
+            foreach (TagLabel tag in m_tags.Values)
+            {
+                foreach (GameObject axis in tag.Axes)
+                {
+                    axis.GetComponent<Renderer>().enabled = m_axesVisible;
+                }
+            }
+        }
+
         private void Update()
         {
-            HandleLeftY();
             HandleThumbstick();
             HandleRightGrip();
 
@@ -423,22 +436,6 @@ namespace BoxTagApp
             tag.Shown = text;
             tag.Text.text = text;
             tag.Text.color = known ? m_textColor : m_unknownColor;
-        }
-
-        private void HandleLeftY()
-        {
-            if (OVRInput.GetDown(OVRInput.Button.Four))
-            {
-                m_axesVisible = !m_axesVisible;
-                foreach (TagLabel tag in m_tags.Values)
-                {
-                    foreach (GameObject axis in tag.Axes)
-                    {
-                        axis.GetComponent<Renderer>().enabled = m_axesVisible;
-                    }
-                }
-                Debug.Log(m_axesVisible ? "[BoxTag] Debug axes ON" : "[BoxTag] Debug axes OFF");
-            }
         }
 
         private void HandleThumbstick()

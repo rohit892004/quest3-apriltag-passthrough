@@ -1,182 +1,178 @@
-# BoxTagApp
+# BoxTag App
 
-Quest 3 app that reads AprilTags from the passthrough camera and shows labels from a database.
-Own code lives only in `Assets/BoxTagApp/`. The AprilTag library (`Assets/AprilTag/`) and the
-sample code (`Assets/PassthroughCameraApiSamples/`) are referenced or left unchanged.
+A Quest 3 / 3S app that reads AprilTags (tag36h11) with the passthrough camera, shows the camera
+feed and the detected IDs, looks up each ID's label in an online database, and places the label
+floating above the real tag in the room.
 
-App identity: product name `BoxTag App`, Android package `com.asas.boxtagapp`.
-Change `AndroidPackageName` in `Editor/BoxTagAppBuild.cs` to use a different package.
+- App name: **BoxTag App**. Android package: `com.asas.boxtagapp` (change `AndroidPackageName` in `Editor/BoxTagAppBuild.cs`).
+- Unity: **6000.0.66f2**, Built-in render pipeline, Android, OpenXR / Meta Quest.
+- Release APK: `Builds/BoxTagApp_Final.apk`.
 
 ## Status
 
-| Level | Status |
+| Part | Status |
 |---|---|
-| L1 – camera feed on a world-space panel | Works on headset. |
-| L2 – capture, detect tag36h11, show IDs | Works on headset (beep, captured frame, ID). |
-| L3 – tag ID → label from database | Works on headset (online Gist, Left X reload). |
-| L4 – labels above real tags | Built (`Builds/BoxTagApp_L4.apk`). Needs a headset test: position, lock-on, and the Left Y axes. |
-| Bonus – continuous mode, tagStandard52h13 | Not started |
+| L1 – live camera feed on a world-space panel | Works on headset. |
+| L2 – single capture (A), detect tag36h11, show IDs | Works on headset. **This is the reliable detection path.** |
+| L3 – tag ID → label from an online database (Gist) | Works on headset. Left X reloads. |
+| L4 – labels floating above the real tags | Works on headset in DepthRaycast mode. |
+| Bonus – continuous detection (B) | **Beta / experimental.** Not reliable yet. Use single capture (A). |
+| tagStandard52h13 | **Not done.** Needs a native library rebuild. Only tag36h11 is detected. |
+
+## What each level does and how it works
+
+**L1 – Live feed.** The MRUK `PassthroughCameraAccess` component opens the left camera. Each frame,
+`GetTexture()` (a GPU texture) is shown on the feed panel. The panel is a world-space canvas placed
+in front of the head when the app starts. The right grip short tap re-places it.
+
+**L2 – Capture and detect.** Pressing A (or the right trigger) calls `GetColors()`, which blocks
+briefly. The pixels, the camera pose (`GetCameraPose()`), the timestamp, and the intrinsics are read
+right after it, so they describe the same frame. The intrinsics are mapped from sensor pixels to
+image pixels exactly like MRUK's sensor crop (`BoxTagPoseMath.ScaleIntrinsics`). The pixels are copied,
+and the AprilTag library detects tag36h11 on a worker thread. The main thread gets the results and
+shows the captured frame with the IDs. A green/red reprojection overlay is available with Left Y.
+
+**L3 – Tag database.** `BoxTagDatabase` loads the tag labels in this order:
+1. The bundled default (`Resources/BoxTagDefaultTags.json`) at start. Status `DB: offline default`.
+2. The cache (`persistentDataPath/boxtag_tags.json`), if present. Status `DB: cached`.
+3. The remote URL (`RemoteUrl` in `Data/BoxTagDatabaseSettings.asset`). On success the data is replaced
+   and saved to the cache. Status `DB: online, N tags`.
+
+Each download adds `?t=<unix ms>` to the URL and sends `Cache-Control: no-cache`, so the latest file is
+always fetched. A tag ID with no entry shows `(not in database)` in the panel and `ID n (not in DB)` in orange
+in the world.
+
+**L4 – Floating labels.** For each detected tag, `BoxTagLabels` places one label about 5 cm above the
+tag centre (world up). The label has a dark rounded background, about 3 cm text, a leader bar to a dot at
+the tag centre, and always faces the user.
+
+Tag position has two modes (Left thumbstick click toggles; the status row shows the current one):
+- **DepthRaycast (default).** The tag-centre pixel is turned into a ray with
+  `PassthroughCameraAccess.ViewportPointToRay` (using the capture-time pose), and the ray is cast into the
+  environment depth (`EnvironmentRaycastManager`). The hit point is the tag position. This does not depend on
+  the tag size setting. If the raycast fails, the AprilTag pose is used and the dot is yellow.
+- **AprilTagPose.** The AprilTag pose only: `world = CapturedFrame.CameraPose × tagPose`. This depends on the
+  tag size setting.
+
+In both modes the AprilTag pose gives the orientation.
+
+Stability: a label is placed at its first detection. A re-detection moves it only if the position differs by
+more than 3 cm, and then it eases there. A label whose tag is not detected stays where it was, unless the tag
+position is inside the captured image (with a margin) and in front of the camera. Then the label fades out
+over 0.3 s, and the log says `[BoxTag] tag N not seen in view -> removed`. A tag outside the captured image
+keeps its label.
 
 ## Architecture
 
 | File | Role |
 |---|---|
-| `Scripts/BoxTagLayout.cs` | **All panel and text sizes/positions.** Builds each panel as one world-space canvas (TMP text, layout groups) at runtime. Inspector fields on the `BoxTagLayout` object. Right grip re-places the panels. |
-| `Scripts/BoxTagCameraFeed.cs` | L1. Shows the live camera (MRUK `PassthroughCameraAccess`) on the feed panel. |
-| `Scripts/BoxTagCapture.cs` | L2. Button press → one frame, pose/timestamp/intrinsics for that frame, shows the frame and the IDs. Beep and flash on capture. |
-| `Scripts/BoxTagDetector.cs` | L2. tag36h11 detection on a **worker thread**. |
-| `Scripts/BoxTagPoseMath.cs` | L2. MRUK-exact intrinsics scaling, the single OpenCV → Unity camera-space pose conversion. |
-| `Scripts/BoxTagDatabase.cs` | L3. Loads tag ID → label: bundled default → cache → remote. Left X reloads. |
-| `Scripts/BoxTagDatabaseSettings.cs` | L3. ScriptableObject with the remote URL, timeout and cache name. |
-| `Data/BoxTagDatabaseSettings.asset` | The settings asset (edit the Remote Url here). |
-| `Resources/BoxTagDefaultTags.json` | Bundled fallback database (ships inside the APK). |
-| `Editor/BoxTagAppSetup.cs` | `Tools > BoxTagApp > Setup Scene`. Builds the scene, passthrough setup, Build Settings. |
-| `Editor/BoxTagAppBuild.cs` | `Tools > BoxTagApp > Build APK`. Headless APK build, sets the app identity. |
+| `Scripts/BoxTagLayout.cs` | Owns all panels and text. Each panel is a world-space canvas (TextMeshPro, layout groups), built at runtime. Sizes are Inspector fields. |
+| `Scripts/BoxTagCameraFeed.cs` | L1. Gives the live camera texture to the layout. |
+| `Scripts/BoxTagCapture.cs` | L2. A (single capture) and B (continuous, beta). Reads the pixels and the pose, submits to the detector, and runs the debug view (Left Y). |
+| `Scripts/BoxTagDetector.cs` | L2. AprilTag detection on a worker thread. Returns the ID, the pose (Unity convention), the corners, and the reprojection error. |
+| `Scripts/BoxTagPoseMath.cs` | L2. Intrinsics mapping (`ScaleIntrinsics`), the one OpenCV → Unity conversion (`ToUnityCameraSpace`), the reprojection check, and `CapturedFrame`. |
+| `Scripts/BoxTagDatabase.cs` | L3. Loads tag labels: bundled → cache → remote Gist. Left X reloads. |
+| `Scripts/BoxTagDatabaseSettings.cs` | L3. ScriptableObject: the remote URL, timeout, and cache file name. |
+| `Scripts/BoxTagLabels.cs` | L4. World labels, DepthRaycast / AprilTagPose, stability rules, removal, right grip (tap re-places, hold clears). |
+| `Editor/BoxTagAppSetup.cs` | `Tools > BoxTagApp > Setup Scene`. Builds the scene from scratch. See the warning below. |
+| `Editor/BoxTagAppBuild.cs` | `Tools > BoxTagApp > Build APK`. Creates the debug materials, includes their shader, and builds the release APK. |
+| `Resources/BoxTagDebug*.mat` | Unlit debug materials (red, green, blue, white, yellow), created by the build. |
+| `Resources/BoxTagDefaultTags.json` | Bundled fallback tags (inside the APK). |
+| `Data/BoxTagDatabaseSettings.asset` | The remote URL and settings. |
 
-**Camera ownership:** only the MRUK `PassthroughCameraAccess` opens the camera.
+The scene (`Scene/BoxTagApp.unity`) is the only enabled scene. `BoxTagLabels` and the database and
+capture connections are created or wired at runtime, so you do not need to edit the scene for L4.
 
-## Tag database (L3)
+**Warning:** `Setup Scene` creates a new scene and overwrites `Scene/BoxTagApp.unity`. It also resets
+manual scene edits. Run it only to rebuild the scene from nothing.
 
-The database is a JSON file, served from a GitHub Gist raw link or any HTTPS URL:
+**Camera ownership:** only the MRUK `PassthroughCameraAccess` opens the camera. No `WebCamTexture` or
+other camera owner is used.
 
-```json
-{ "tags": [ {"id":1,"family":"tag36h11","label":"Box no 1"},
-            {"id":2,"family":"tag36h11","label":"Box no 2"} ] }
-```
-
-To add a tag, edit the Gist and press **left X** on the headset. **No code change and no rebuild**
-are needed. The code has no ID → label mapping. Only `tag36h11` entries with a label are used.
-
-**Setting the URL:** open `Assets/BoxTagApp/Data/BoxTagDatabaseSettings.asset` in the Inspector and
-set **Remote Url** to the raw Gist link. The placeholder `REPLACE_WITH_GIST_RAW_URL` skips the download.
-Setup Scene keeps this asset on later runs, so your URL is not overwritten.
-
-**Load order:**
-1. Bundled default (`BoxTagDefaultTags.json`), loaded immediately. Status `DB: offline default`.
-2. Cache in `persistentDataPath/boxtag_tags.json`, if present. Status `DB: cached`.
-3. Remote URL. On success it replaces the data and is saved to the cache. Status `DB: online`.
-
-**Results on the panel:** `ID 1 -> Box no 1`, or `ID 5 -> (not in database)`.
-**Status row:** under the feed's camera image. `DB: ...` on the left, for example `DB: online, 2 tags`, and `Build ...` on the right.
-**Left X:** reloads the remote file. The result shows as `DB reloaded: N tags` for 3 seconds.
-
-## Floating labels (L4)
-
-Each detected tag gets one label, about 5 cm above the real tag (`Scripts/BoxTagLabels.cs`).
-
-**World pose:** the capture-time camera pose (`CapturedFrame.CameraPose`) × the tag pose from
-the detector, which is already converted from OpenCV by `BoxTagPoseMath.ToUnityCameraSpace`.
-The camera pose is copied at capture, so the label stays on the tag while you move.
-
-**Tag size:** `BoxTagDetector` → **Tag Size Meters** (the outer black square edge, e.g. `0.10`
-for a 10 cm tag). Set it before you capture.
-
-**Adding a tag:** edit the Gist, then press **left X**. Next capture shows the new label. No code change, no rebuild.
-
-**Unknown ID:** `ID 5 (not in DB)` in orange.
-
-**Re-detection:** the label eases to the new position. A tag not seen again keeps its label where it was.
-Labels re-read the database each frame, so a left X reload also updates existing labels.
+## Controls
 
 | Control | Action |
 |---|---|
-| Right A / right trigger | Capture and detect (unchanged). |
-| Right B | Toggle **Continuous** mode (shown on the status row). |
-| Right A / trigger | Single capture. Ignored while Continuous is ON. |
-| Left Y | Show or hide debug axes on each tag (red x, green y, blue z). |
-| Left thumbstick click | Toggle pose mode: `DepthRaycast` (default) / `AprilTagPose`. Shown on the status row. Applies to the next capture. |
+| **A** (right) or right trigger | Single capture: detect the tags now. Ignored while Continuous is ON. |
+| **X** (left) | Reload the database from the Gist. |
+| **Y** (left) | Debug view on or off: tag axes (red x, green y, blue z, 5 cm × 3 mm) and the reprojection corners (green detected, red reprojected). **OFF by default.** |
+| **B** (right) | Continuous (beta) on or off. Shown as `Continuous (beta)` on the status row. |
 | Right grip, short tap | Re-place the panels in front of the head. |
 | Right grip, hold 1 s | Clear all labels. |
-| Left X | Reload the database (unchanged). |
+| Left thumbstick click | Toggle the pose mode: `DepthRaycast` (default) / `AprilTagPose`. Applies to the next capture. |
 
-Log lines per capture: `[BoxTag] tag <id> mode=<depth|apriltag|apriltag-fallback> pixel=(u,v) world=(x,y,z) dist=<m> m reprojErr=<px> px`.
+The feed panel shows these controls at its bottom:
+`A: Capture  X: Reload DB  Y: Debug  B: Continuous (beta)  Grip: Move panels`
 
-**Continuous mode (right B, bonus):** about 5 detections per second.
-- The camera texture is read back with `AsyncGPUReadback`. The frame never waits for the GPU.
-- Only one readback and one detection run at a time. Detection runs on the worker thread.
-- Each detection logs `[BoxTag] continuous: detect=<ms> ms copy=<ms> ms tags=<n>`. `detect` is the worker time, and `copy` is the main-thread copy of the readback.
-- A label is removed when its tag is in the current view and has not been detected for about 1 s
-  (`Continuous Remove Seconds`). A single capture still removes at once.
-- If the camera texture does not support readback, continuous mode stops after 3 errors and logs why.
-- Not done: **tagStandard52h13**. It needs a native library rebuild, so only tag36h11 is detected.
+## Add a new tag (no rebuild)
 
-**Reprojection check:** the captured image shows each tag's detected corners in green and the corners
-reprojected from the AprilTag pose in red. A good fit is about 1 px or less. Large red/green offsets mean
-the pose or the intrinsics are wrong.
+1. Print a tag36h11 tag (10 cm outer black square; set the same size in `BoxTagDetector` → Tag Size Meters).
+2. Open the Gist and add an entry, for example:
+   `{ "id": 3, "family": "tag36h11", "label": "Box no 3" }`
+   inside the `tags` array of `tags.json`. Save the Gist.
+3. On the headset, press **X**. The status shows `DB reloaded: N tags` for 3 seconds.
+4. Capture the tag with **A**. Its label shows `Box no 3`. Existing labels update their text on the reload too.
 
-**Depth mode** needs the `com.oculus.permission.USE_SCENE` permission. The app asks for it on first launch.
-Without it, environment depth stays off and the label uses the AprilTag pose (`apriltag-fallback`, yellow dot).
+No code change and no rebuild are needed.
 
-## Layout settings (tweak in the Inspector, no code change)
+## Build steps
 
-Select the `BoxTagLayout` object in the scene. Placement is in **metres**. Panel and text sizes are in
-**millimetres**: each panel is a world-space canvas with 1 canvas unit = 1 mm, and font sizes are
-the mm em size.
+**Requirements:** Unity 6000.0.66f2 with the Android build module, the project's packages (MRUK, Meta XR SDK,
+AprilTag library), and TMP Essentials.
 
-| Setting | Default | Meaning |
-|---|---|---|
-| Feed Width Meters | 0.45 | Live feed panel width. Height follows its content (4:3 image). |
-| Feed Distance Meters | 1.0 | Distance straight ahead of the head. |
-| Feed Height Offset Meters | -0.15 | Negative = lower than eye level. |
-| Feed Tilt Degrees | 10 | Positive leans the top toward the user. |
-| Captured Width Meters | 0.30 | Captured panel width. Top edge level with the feed's top; the results grow downward. |
-| Gap Meters | 0.05 | Gap between the two panels. |
-| Panel Padding Mm | 8 | Padding inside each panel. The dark background covers it. |
-| Row Spacing Mm | 4 | Space between title, image and status/results. |
-| Background Color | black, alpha 0.6 | Panel background (60% opaque). |
-| Text Color | white | All panel text. |
-| Title Font Size | 10 | "Live camera" and "Captured frame". |
-| Result Font Size | 18 | One line per tag, for example `ID 1 -> Box no 1`. |
-| Status Font Size | 7 | `DB: ...` (left) and `Build ...` (right) under the feed image. |
-| Max Result Lines | 5 | More tags than this: the last line reads `+N more`. |
-| Row Height Factor | 1.3 | Row height = font size × factor. |
-| Result Spacing Mm | 2 | Space between result lines. |
+1. Open the project in Unity 6000.0.66f2.
+2. **Window > TextMeshPro > Import TMP Essentials** (once per project; it is already in `Assets/TextMesh Pro`).
+3. Set the remote URL in `Assets/BoxTagApp/Data/BoxTagDatabaseSettings.asset` (or leave the placeholder to use only the bundled tags).
+4. Close the Unity editor if you use batch builds on the same project folder.
+5. Build the release APK, either from the menu (`Tools > BoxTagApp > Build APK`) or headless:
+   ```
+   Unity.exe -batchmode -nographics -quit -projectPath <project> -executeMethod BoxTagAppBuild.BuildApkHeadless -logFile <log>
+   ```
+   Output: `Builds/BoxTagApp_Final.apk`. A successful build prints `[BoxTagAppBuild] SUCCESS`.
+   The build also creates the debug materials and adds `Unlit/Color` to Always Included Shaders.
+6. Install and launch on the headset with adb (from the project folder):
+   ```
+   adb install -r "Builds\BoxTagApp_Final.apk"
+   adb shell monkey -p com.asas.boxtagapp -c android.intent.category.LAUNCHER 1
+   ```
 
-Text never leaves its row. A row that is too long is cut with an ellipsis.
+**Permissions:** the manifest declares `horizonos.permission.HEADSET_CAMERA` (camera) and
+`com.oculus.permission.USE_SCENE` (environment depth). The app asks for USE_SCENE on first launch. Accept
+it, or DepthRaycast will fall back to the AprilTag pose (yellow dots).
 
-**TextMeshPro:** the project needs its **TMP Essentials** once: in the Editor, `Window > TextMeshPro >
-Import TMP Essentials`. Without it no text is drawn, and `[BoxTag] No TMP default font` is logged.
+**Signing:** the APK is built with the project's Android keystore settings. Check `Player Settings >
+Publishing Settings` before you distribute it.
 
-**Layout check:** the first placement logs `[BoxTag] panel size mm: feed WxH, captured WxH`.
+## Quick test checklist
 
-Right grip: press to re-place the panels in front of your current head position.
+1. The feed shows the room. The controls line is at the bottom of the feed panel.
+2. Hold a tag 40–80 cm away and press **A**. The captured panel shows the tag with its ID and label.
+3. Press **Y**. The corners show: green on the tag, red on the reprojection, about 1 px apart.
+4. Left thumbstick click to switch to AprilTagPose and back. The status row shows the mode.
+5. Move your head: the label stays on the tag.
+6. Cover the tag and press **A**: the label fades out in about 0.3 s.
 
-## Capture details (L2)
-- Input: right controller **A** or right **index trigger**. Left **X** reloads the database.
-- Intrinsics follow MRUK exactly (`PassthroughCameraAccess.CalcSensorCropRegion`, MRUK 85.0.0):
-  a centred sensor crop (1728×1296 at y=216 for a 1280×960 output), then one uniform scale
-  `s = 1280/1728`. So `fx' = fx·s`, `fy' = fy·s`, `cx' = (cx − cropX)·s`, `cy' = (cy − cropY)·s`.
-  The capture log prints the crop, the scale, and both focal lengths.
-- `GetCameraPose()` already includes `LensOffset`, so it is not applied again.
+## Known limitations
 
-## Coordinates (L2)
-`BoxTagPoseMath.ToUnityCameraSpace` is the only place the conversion happens:
-- `position = F·t`, `rotation = F·R·F` with `F = diag(1,-1,1)` (OpenCV camera → Unity camera).
+- **tagStandard52h13 is not done.** It needs a native rebuild of the AprilTag library. Only tag36h11 is detected.
+- **Continuous (B) is beta and not reliable.** Single capture (A) is the working detection path. Continuous mode
+  takes a one-time GetColors reading on each B press to check the image row order.
+- **Depth labels depend on the environment depth.** Glass, very dark or featureless surfaces, and tags far away can
+  give no depth hit. Those labels fall back to the AprilTag pose.
+- **AprilTagPose depends on the tag size setting.** If the printed tag is a different size, the distance is wrong.
+- **One tag per ID.** Two physical tags with the same ID share one label.
+- **Labels are not saved.** Clearing (grip hold) or restarting the app removes them.
+- **Lighting.** AprilTag detection needs a sharp, well-lit image of the tag. Motion blur or glare stops detection.
 
-## Passthrough (full room)
-- `OVRManager.isInsightPassthroughEnabled = true`, `OVRProjectConfig.insightPassthroughSupport = Supported`.
-- `OVRPassthroughLayer`: `Reconstructed`, `Underlay`. Rig cameras: Solid Color, background alpha 0.
-- No skybox, flat ambient.
+## Licenses and attribution
 
-## Build and install
-
-1. Setup Scene (menu, or headless):
-   `Unity.exe -batchmode -nographics -quit -projectPath <project> -executeMethod BoxTagAppSetup.SetupScene -logFile <log>`
-2. Build APK (menu, or headless):
-   `Unity.exe -batchmode -nographics -quit -projectPath <project> -executeMethod BoxTagAppBuild.BuildApkHeadless -logFile <log>`
-   Output: `Builds/BoxTagApp_L3.apk`. Success line: `[BoxTagAppBuild] SUCCESS`.
-   Close the Unity editor first if you run batch builds on the same project folder.
-3. Install and launch from a cmd window with the Unity SDK adb:
-   `"D:\UnityEditior\6000.0.66f2\Editor\Data\PlaybackEngines\AndroidPlayer\SDK\platform-tools\adb.exe" install -r Builds\BoxTagApp_L3.apk`
-   `"D:\UnityEditior\6000.0.66f2\Editor\Data\PlaybackEngines\AndroidPlayer\SDK\platform-tools\adb.exe" shell am start -n com.asas.boxtagapp/com.unity3d.player.UnityPlayerGameActivity`
-
-## Headset test (L3)
-
-1. Set the Remote Url in the asset (or leave the placeholder to test the bundled/cached data).
-2. Print a tag36h11 tag with ID 1 or 2 (10 cm outer black square). Hold it 40–80 cm away.
-3. Press **A**. Expected: `ID 1 -> Box no 1` in the text under the captured frame.
-4. Check the status line (`DB: …`). Check the log for `[BoxTag] text '…' rendered size`.
-5. Add an entry to the Gist, press left **X**, and confirm `DB reloaded: N tags`.
-
-## Planned: L4
-Labels above the tags, placed in world space with the stored capture pose and smoothing.
+- **Own code (BoxTag App):** everything in `Assets/BoxTagApp/` (scripts, editor tools, data, materials, this README).
+  The scene `Scene/BoxTagApp.unity` is also part of this app.
+- **AprilTag library:** `Assets/AprilTag/` (Unity wrapper by keijiro, built on the AprilTag C library). BSD-2-Clause
+  (copyright The Regents of The University of Michigan, see `Assets/AprilTag/LICENSE`). Used as-is; not edited.
+- **Meta Passthrough Camera API sample:** `Assets/PassthroughCameraApiSamples/`. MIT License (Meta Platforms, Inc.,
+  see `Assets/PassthroughCameraApiSamples/LICENSE.txt`). This app uses its camera prefab through `Setup Scene`, and
+  the `PassthroughCameraAccess` component from the MRUK package.
+- **Meta XR SDK and MRUK packages:** under the Oculus SDK License Agreement (`LICENSE.txt` at the repository root).
+  The environment depth and passthrough features come from these packages.
+- **TextMeshPro:** the TMP Essentials resources imported into `Assets/TextMesh Pro` from Unity's TextMeshPro package. See the package's own license terms.
