@@ -80,6 +80,9 @@ namespace BoxTagApp
         /// <summary>Transform of the live feed panel (used to place the captured-frame panel next to it).</summary>
         public Transform ScreenTransform => m_screen != null ? m_screen.transform : null;
 
+        /// <summary>Panel height in metres (the panel's local Y scale). The captured-frame panel matches it.</summary>
+        public float ScreenHeightMeters => m_screen != null ? m_screen.transform.localScale.y : 0f;
+
         /// <summary>Panel width in metres (the panel's local X scale).</summary>
         public float ScreenWidthMeters => m_screen != null ? m_screen.transform.localScale.x : 0f;
 

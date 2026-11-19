@@ -20,23 +20,56 @@ namespace BoxTagApp
         }
 
         /// <summary>
-        /// Converts MRUK CameraIntrinsics (given for SensorResolution) to the resolution of the
-        /// image we detect on. Focal length and principal point scale with the resolution ratio.
+        /// Sensor crop used by MRUK (PassthroughCameraAccess.CalcSensorCropRegion, MRUK 85.0.0):
+        /// the output image is a centred crop of the sensor, with one uniform scale.
+        /// </summary>
+        public struct SensorCrop
+        {
+            public float X, Y, Width, Height; // in sensor pixels
+        }
+
+        /// <summary>
+        /// Mirrors MRUK's CalcSensorCropRegion exactly:
+        ///   scale = imageRes / sensorRes; scale /= max(scale.x, scale.y)
+        ///   crop  = (sensor.x*(1-scale.x)/2, sensor.y*(1-scale.y)/2, sensor.x*scale.x, sensor.y*scale.y)
+        /// </summary>
+        public static SensorCrop CalcSensorCrop(Vector2Int sensorResolution, Vector2Int imageResolution)
+        {
+            Vector2 sensor = sensorResolution;
+            Vector2 scale = new Vector2((float)imageResolution.x / sensor.x, (float)imageResolution.y / sensor.y);
+            scale /= Mathf.Max(scale.x, scale.y);
+            return new SensorCrop
+            {
+                X = sensor.x * (1f - scale.x) * 0.5f,
+                Y = sensor.y * (1f - scale.y) * 0.5f,
+                Width = sensor.x * scale.x,
+                Height = sensor.y * scale.y,
+            };
+        }
+
+        /// <summary>
+        /// Converts MRUK CameraIntrinsics (in SENSOR pixels) to the detected image's pixels.
+        /// Steps (same as MRUK's viewport mapping):
+        ///   1. crop = CalcSensorCrop(sensor, image)     (centred crop, e.g. 1728x1296 at y=216)
+        ///   2. s    = image.x / crop.Width               (one uniform scale; equals image.y / crop.Height)
+        ///   3. fx' = fx*s, fy' = fy*s, cx' = (cx - crop.X)*s, cy' = (cy - crop.Y)*s
         /// </summary>
         public static PixelIntrinsics ScaleIntrinsics(
             Vector2 focalLength,
             Vector2 principalPoint,
             Vector2Int sensorResolution,
-            Vector2Int imageResolution)
+            Vector2Int imageResolution,
+            out SensorCrop crop,
+            out float uniformScale)
         {
-            double sx = (double)imageResolution.x / sensorResolution.x;
-            double sy = (double)imageResolution.y / sensorResolution.y;
+            crop = CalcSensorCrop(sensorResolution, imageResolution);
+            uniformScale = imageResolution.x / crop.Width;
             return new PixelIntrinsics
             {
-                Fx = focalLength.x * sx,
-                Fy = focalLength.y * sy,
-                Cx = principalPoint.x * sx,
-                Cy = principalPoint.y * sy,
+                Fx = focalLength.x * uniformScale,
+                Fy = focalLength.y * uniformScale,
+                Cx = (principalPoint.x - crop.X) * uniformScale,
+                Cy = (principalPoint.y - crop.Y) * uniformScale,
             };
         }
 

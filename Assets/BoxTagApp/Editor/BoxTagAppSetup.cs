@@ -60,7 +60,8 @@ public static class BoxTagAppSetup
         var detector = detectorGo.AddComponent<BoxTagDetector>();
 
         Renderer capturedScreen = CreatePanel("CapturedFramePanel");
-        TextMesh resultText = CreateResultText();
+        TextMesh titleText = CreateText("CapturedFrameTitle", "Captured frame", 0.03f, 72, TextAnchor.LowerCenter);
+        TextMesh resultText = CreateText("CaptureResultText", "Press A or right trigger to capture", 0.045f, 110, TextAnchor.UpperCenter);
 
         var captureGo = new GameObject("BoxTagCapture");
         var capture = captureGo.AddComponent<BoxTagCapture>();
@@ -68,6 +69,7 @@ public static class BoxTagAppSetup
         SetPrivate(capture, "m_detector", detector);
         SetPrivate(capture, "m_feed", feed);
         SetPrivate(capture, "m_capturedScreen", capturedScreen);
+        SetPrivate(capture, "m_titleText", titleText);
         SetPrivate(capture, "m_resultText", resultText);
 
         EnsureFolder(Root + "/Scene");
@@ -219,15 +221,15 @@ public static class BoxTagAppSetup
         return renderer;
     }
 
-    // Text that shows the detected tag IDs. Positioned by BoxTagCapture.
-    private static TextMesh CreateResultText()
+    // Text object for the captured-frame title and the detected IDs. Positioned by BoxTagCapture.
+    private static TextMesh CreateText(string name, string content, float characterSize, int fontSize, TextAnchor anchor)
     {
-        var go = new GameObject("CaptureResultText");
+        var go = new GameObject(name);
         var text = go.AddComponent<TextMesh>();
-        text.text = "Press A or right trigger to capture";
-        text.characterSize = 0.02f;
-        text.fontSize = 48;
-        text.anchor = TextAnchor.MiddleCenter;
+        text.text = content;
+        text.characterSize = characterSize;
+        text.fontSize = fontSize;
+        text.anchor = anchor;
         text.alignment = TextAlignment.Center;
         text.color = Color.white;
         return text;

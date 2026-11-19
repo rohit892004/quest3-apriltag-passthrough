@@ -8,13 +8,17 @@
 //   - GetColors() blocks briefly. That is acceptable for a single press.
 //   - Pose, timestamp and intrinsics are read IMMEDIATELY after GetColors(), so they describe the
 //     same frame. They are stored with the frame (needed for L4 world placement).
-//   - Intrinsics are scaled from SensorResolution to the detected image size.
+//   - Intrinsics are mapped exactly like MRUK: centred sensor crop, then one uniform scale
+//     (see BoxTagPoseMath.ScaleIntrinsics).
 //   - LensOffset is NOT applied again: MRUK GetCameraPose() already includes it.
 //   - Only the first Width*Height entries of GetColors() are valid pixels. MRUK allocates the
 //     buffer as Width*Height*4 Color32 entries.
 //
+// Feedback on capture: a short beep and a brief white flash of the captured-frame panel.
+//
 // Camera ownership: this script only reads from the MRUK PassthroughCameraAccess component.
 
+using System.Collections;
 using System.Collections.Generic;
 using Meta.XR;
 using Unity.Collections;
@@ -22,6 +26,7 @@ using UnityEngine;
 
 namespace BoxTagApp
 {
+    [RequireComponent(typeof(AudioSource))]
     public class BoxTagCapture : MonoBehaviour
     {
         [SerializeField] private PassthroughCameraAccess m_cameraAccess;
@@ -31,14 +36,31 @@ namespace BoxTagApp
         [Tooltip("Quad that shows the captured frame.")]
         [SerializeField] private Renderer m_capturedScreen;
 
-        [Tooltip("Text that lists the detected tag IDs.")]
+        [Tooltip("Title above the captured frame (\"Captured frame\").")]
+        [SerializeField] private TextMesh m_titleText;
+
+        [Tooltip("Detected tag IDs, shown in large text under the captured frame.")]
         [SerializeField] private TextMesh m_resultText;
 
-        [Tooltip("Height of the captured-frame panel in metres. Width follows the image aspect ratio.")]
-        [SerializeField] private float m_capturedHeightMeters = 0.6f;
+        [Tooltip("Gap in metres between the live feed panel and the captured-frame panel.")]
+        [SerializeField] private float m_gapMeters = 0.3f;
+
+        [Tooltip("Used only if the live feed panel is missing.")]
+        [SerializeField] private float m_fallbackHeightMeters = 0.8f;
 
         private Texture2D m_capturedTexture;
         private bool m_capturedPanelPlaced;
+        private AudioSource m_audio;
+        private AudioClip m_beep;
+        private Coroutine m_flash;
+
+        private void Awake()
+        {
+            m_audio = GetComponent<AudioSource>();
+            m_audio.playOnAwake = false;
+            m_audio.spatialBlend = 0f; // plain 2D beep, not positioned in the room
+            m_beep = MakeBeep(880f, 0.12f);
+        }
 
         private void Update()
         {
@@ -83,7 +105,9 @@ namespace BoxTagApp
                 intrinsics.FocalLength,
                 intrinsics.PrincipalPoint,
                 intrinsics.SensorResolution,
-                res);
+                res,
+                out BoxTagPoseMath.SensorCrop crop,
+                out float uniformScale);
 
             var frame = new CapturedFrame
             {
@@ -98,11 +122,15 @@ namespace BoxTagApp
             Debug.Log(
                 "[BoxTag] Capture " + res.x + "x" + res.y +
                 " sensor=" + intrinsics.SensorResolution.x + "x" + intrinsics.SensorResolution.y +
+                " crop=(" + crop.X.ToString("F1") + "," + crop.Y.ToString("F1") + " " +
+                crop.Width.ToString("F1") + "x" + crop.Height.ToString("F1") + ")" +
+                " scale=" + uniformScale.ToString("F4") +
                 " fx=" + scaled.Fx.ToString("F1") + " fy=" + scaled.Fy.ToString("F1") +
                 " cx=" + scaled.Cx.ToString("F1") + " cy=" + scaled.Cy.ToString("F1") +
                 " camPos=" + frame.CameraPose.position.ToString("F3") +
                 " camRot=" + frame.CameraPose.rotation.eulerAngles.ToString("F1"));
 
+            PlayCaptureFeedback();
             ShowCapturedFrame(frame);
             SetText("Detecting...");
 
@@ -128,7 +156,7 @@ namespace BoxTagApp
             var lines = new List<string>();
             foreach (TagResult tag in results)
             {
-                lines.Add("ID " + tag.Id + "  (dist " + tag.Position.magnitude.ToString("F2") + " m)");
+                lines.Add("ID " + tag.Id + "  (" + tag.Position.magnitude.ToString("F2") + " m)");
                 Debug.Log("[BoxTag] Tag ID=" + tag.Id +
                           " hamming=" + tag.Hamming +
                           " margin=" + tag.DecisionMargin.ToString("F1") +
@@ -160,15 +188,20 @@ namespace BoxTagApp
             }
             m_capturedScreen.material.mainTexture = m_capturedTexture;
 
+            // Same height as the live feed, width from the image's aspect ratio.
+            float height = m_feed != null && m_feed.ScreenHeightMeters > 0f
+                ? m_feed.ScreenHeightMeters
+                : m_fallbackHeightMeters;
             float aspect = (float)frame.Width / frame.Height;
-            float width = m_capturedHeightMeters * aspect;
-            m_capturedScreen.transform.localScale = new Vector3(width, m_capturedHeightMeters, 1f);
+            float width = height * aspect;
+            m_capturedScreen.transform.localScale = new Vector3(width, height, 1f);
 
-            PlaceCapturedPanelNextToFeed(width);
+            PlaceCapturedPanelNextToFeed(width, height);
         }
 
         // Places the captured-frame panel once, to the right of the live feed, facing the same way.
-        private void PlaceCapturedPanelNextToFeed(float capturedWidth)
+        // Title sits above it, and the detected IDs sit below it.
+        private void PlaceCapturedPanelNextToFeed(float capturedWidth, float capturedHeight)
         {
             if (m_capturedPanelPlaced || m_feed == null || m_feed.ScreenTransform == null)
             {
@@ -176,20 +209,69 @@ namespace BoxTagApp
             }
 
             Transform feed = m_feed.ScreenTransform;
-            float gap = 0.1f;
-            Vector3 offset = feed.right * (m_feed.ScreenWidthMeters * 0.5f + gap + capturedWidth * 0.5f);
+            Vector3 offset = feed.right * (m_feed.ScreenWidthMeters * 0.5f + m_gapMeters + capturedWidth * 0.5f);
 
-            m_capturedScreen.transform.position = feed.position + offset;
-            m_capturedScreen.transform.rotation = feed.rotation;
+            Transform panel = m_capturedScreen.transform;
+            panel.position = feed.position + offset;
+            panel.rotation = feed.rotation;
 
-            // Result text sits above the captured frame.
+            if (m_titleText != null)
+            {
+                m_titleText.transform.position = panel.position + panel.up * (capturedHeight * 0.5f + 0.05f);
+                m_titleText.transform.rotation = feed.rotation;
+            }
+
             if (m_resultText != null)
             {
-                m_resultText.transform.position = m_capturedScreen.transform.position + Vector3.up * (m_capturedHeightMeters * 0.5f + 0.12f);
+                m_resultText.transform.position = panel.position - panel.up * (capturedHeight * 0.5f + 0.05f);
                 m_resultText.transform.rotation = feed.rotation;
             }
 
             m_capturedPanelPlaced = true;
+        }
+
+        // Beep plus a short white flash of the captured panel, so the press is clearly acknowledged.
+        private void PlayCaptureFeedback()
+        {
+            if (m_beep != null)
+            {
+                m_audio.PlayOneShot(m_beep);
+            }
+
+            if (m_capturedScreen != null)
+            {
+                if (m_flash != null)
+                {
+                    StopCoroutine(m_flash);
+                }
+                m_flash = StartCoroutine(FlashCapturedPanel());
+            }
+        }
+
+        private IEnumerator FlashCapturedPanel()
+        {
+            Material mat = m_capturedScreen.material;
+            // Unlit/Texture multiplies the texture by _Color, so values above 1 brighten it.
+            mat.color = new Color(2.5f, 2.5f, 2.5f, 1f);
+            yield return new WaitForSeconds(0.15f);
+            mat.color = Color.white;
+            m_flash = null;
+        }
+
+        // Builds a short sine beep at runtime, so no audio asset is needed in the project.
+        private static AudioClip MakeBeep(float frequencyHz, float seconds)
+        {
+            const int sampleRate = 44100;
+            int samples = (int)(seconds * sampleRate);
+            var data = new float[samples];
+            for (int i = 0; i < samples; i++)
+            {
+                float envelope = 1f - (float)i / samples; // fade out to avoid a click
+                data[i] = 0.3f * envelope * Mathf.Sin(2f * Mathf.PI * frequencyHz * i / sampleRate);
+            }
+            var clip = AudioClip.Create("BoxTagBeep", samples, 1, sampleRate, false);
+            clip.SetData(data, 0);
+            return clip;
         }
 
         private void SetText(string text)
