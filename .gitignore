@@ -42,3 +42,6 @@
 *.logcat
 sysinfo.txt
 crashlytics-build.properties
+
+# Local scratch screenshots and debug images (not part of the project)
+/overlap.png

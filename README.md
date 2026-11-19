@@ -1,5 +1,16 @@
 # Unity-PassthroughCameraAPISamples
 
+This repository has two parts:
+
+- **BoxTag App** (`Assets/BoxTagApp/`): a Quest 3 app that detects AprilTags (tag36h11) with the
+  passthrough camera, looks up labels in an online database, and floats labels above the real tags.
+  See **[Assets/BoxTagApp/README.md](Assets/BoxTagApp/README.md)** for the levels, controls, build steps,
+  and known limitations. Continuous detection is beta; single capture (A) is the reliable path.
+- **Meta Passthrough Camera API samples** (`Assets/PassthroughCameraApiSamples/`), the original sample
+  project described below.
+
+Credits and third-party licenses are listed in [CREDITS.md](CREDITS.md).
+
 ## Project Overview
 
 The **Unity-PassthroughCameraAPISamples** project helps Unity developers access Quest camera data using the **PassthroughCameraAccess** component from the Mixed Reality Utility Kit (MRUK). This component provides direct access to headset cameras with enhanced functionality including:
