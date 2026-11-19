@@ -12,7 +12,7 @@ MonoBehaviour:
   m_Script: {fileID: 11500000, guid: 8ad6787004b3348edde2a4c6e7e3da07, type: 3}
   m_Name: BoxTagDatabaseSettings
   m_EditorClassIdentifier: 
-  RemoteUrl: REPLACE_WITH_GIST_RAW_URL
+  RemoteUrl: https://gist.githubusercontent.com/rohit892004/7062ed67d74b3e7e63f79a10a27ef771/raw/tags.json
   TimeoutSeconds: 8
   CacheFileName: boxtag_tags.json
   BundledResourceName: BoxTagDefaultTags

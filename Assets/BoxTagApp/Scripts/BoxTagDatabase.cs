@@ -142,6 +142,13 @@ namespace BoxTagApp
             SetStatus(m_status);
         }
 
+        // Adds ?t=<unix ms> (or &t=... if the URL already has a query), so no cache serves an old copy.
+        private static string AddCacheBuster(string url)
+        {
+            string separator = url.Contains("?") ? "&" : "?";
+            return url + separator + "t=" + System.DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+        }
+
         // Downloads the remote file, parses it, saves it to the cache, and applies it.
         // Calls done(true) only if the new data was applied.
         private IEnumerator FetchRemote(Action<bool> done)
@@ -154,8 +161,11 @@ namespace BoxTagApp
                 yield break;
             }
 
-            using (UnityWebRequest request = UnityWebRequest.Get(url))
+            // Bypass caches: a new timestamp on every request, so Reload always fetches the latest file.
+            string requestUrl = AddCacheBuster(url);
+            using (UnityWebRequest request = UnityWebRequest.Get(requestUrl))
             {
+                request.SetRequestHeader("Cache-Control", "no-cache");
                 request.timeout = Mathf.Max(1, m_settings.TimeoutSeconds);
                 yield return request.SendWebRequest();
 
