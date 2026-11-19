@@ -77,6 +77,12 @@ namespace BoxTagApp
             }
         }
 
+        /// <summary>Transform of the live feed panel (used to place the captured-frame panel next to it).</summary>
+        public Transform ScreenTransform => m_screen != null ? m_screen.transform : null;
+
+        /// <summary>Panel width in metres (the panel's local X scale).</summary>
+        public float ScreenWidthMeters => m_screen != null ? m_screen.transform.localScale.x : 0f;
+
         /// <summary>Moves the panel in front of the user's head again (useful while testing).</summary>
         public void Recenter()
         {

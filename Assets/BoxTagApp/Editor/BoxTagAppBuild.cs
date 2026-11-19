@@ -1,12 +1,12 @@
 // BoxTagAppBuild.cs
 // Editor-only helper that builds the BoxTagApp Android APK.
-// Menu: Tools > BoxTagApp > Build APK (L1).
+// Menu: Tools > BoxTagApp > Build APK.
 //
 // Headless (used for CI-style builds, no Editor UI needed):
 //   Unity.exe -batchmode -nographics -quit -projectPath <project> ^
 //     -executeMethod BoxTagAppBuild.BuildApkHeadless -logFile <log>
 //
-// Output: Builds/BoxTagApp_L1.apk (Builds/ is git-ignored).
+// Output: Builds/BoxTagApp_L2.apk (Builds/ is git-ignored).
 
 using System.IO;
 using System.Linq;
@@ -17,9 +17,15 @@ using UnityEngine;
 public static class BoxTagAppBuild
 {
     private const string BoxTagScene = "Assets/BoxTagApp/Scene/BoxTagApp.unity";
-    private const string ApkPath = "Builds/BoxTagApp_L1.apk";
+    private const string ApkPath = "Builds/BoxTagApp_L2.apk";
 
-    [MenuItem("Tools/BoxTagApp/Build APK (L1)")]
+    // App identity. PLACEHOLDER package name: change "assignment" to your own name, e.g.
+    // "com.yourname.boxtagapp". This is the only place to change it. Changing it installs a
+    // separate app (it does not replace com.samples.passthroughcamera).
+    private const string AndroidPackageName = "com.assignment.boxtagapp";
+    private const string ProductName = "BoxTag App";
+
+    [MenuItem("Tools/BoxTagApp/Build APK")]
     public static void BuildApkMenu()
     {
         Build();
@@ -53,6 +59,10 @@ public static class BoxTagAppBuild
         {
             EditorUserBuildSettings.SwitchActiveBuildTarget(BuildTargetGroup.Android, BuildTarget.Android);
         }
+
+        // Own app identity (not the sample's package). Written to ProjectSettings/ProjectSettings.asset.
+        PlayerSettings.SetApplicationIdentifier(BuildTargetGroup.Android, AndroidPackageName);
+        PlayerSettings.productName = ProductName;
 
         Directory.CreateDirectory(Path.GetDirectoryName(ApkPath));
 

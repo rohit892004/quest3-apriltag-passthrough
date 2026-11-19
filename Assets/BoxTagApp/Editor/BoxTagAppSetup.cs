@@ -41,7 +41,7 @@ public static class BoxTagAppSetup
         lightGo.transform.rotation = Quaternion.Euler(50f, -30f, 0f);
 
         // Camera rig (head tracking and the main camera used to place the panel).
-        InstantiateCameraRig();
+        GameObject rig = InstantiateCameraRig();
 
         // The ONE camera owner in this scene: MRUK PassthroughCameraAccess.
         PassthroughCameraAccess cameraAccess = CreateCameraAccess();
@@ -55,7 +55,25 @@ public static class BoxTagAppSetup
         SetPrivate(feed, "m_cameraAccess", cameraAccess);
         SetPrivate(feed, "m_screen", screen);
 
+        // L2: detector (worker-thread AprilTag tag36h11) and capture controller.
+        var detectorGo = new GameObject("BoxTagDetector");
+        var detector = detectorGo.AddComponent<BoxTagDetector>();
+
+        Renderer capturedScreen = CreatePanel("CapturedFramePanel");
+        TextMesh resultText = CreateResultText();
+
+        var captureGo = new GameObject("BoxTagCapture");
+        var capture = captureGo.AddComponent<BoxTagCapture>();
+        SetPrivate(capture, "m_cameraAccess", cameraAccess);
+        SetPrivate(capture, "m_detector", detector);
+        SetPrivate(capture, "m_feed", feed);
+        SetPrivate(capture, "m_capturedScreen", capturedScreen);
+        SetPrivate(capture, "m_resultText", resultText);
+
         EnsureFolder(Root + "/Scene");
+        // Passthrough: applied after all objects exist so it also covers the rig's cameras.
+        ConfigurePassthrough(rig);
+
         if (!EditorSceneManager.SaveScene(scene, ScenePath))
         {
             Debug.LogError("[BoxTagAppSetup] Failed to save " + ScenePath);
@@ -84,7 +102,8 @@ public static class BoxTagAppSetup
         EditorBuildSettings.scenes = scenes.ToArray();
     }
 
-    private static void InstantiateCameraRig()
+    // Returns the rig instance, or null if the prefab was not found.
+    private static GameObject InstantiateCameraRig()
     {
         string[] guids = AssetDatabase.FindAssets("OVRCameraRig t:Prefab");
         foreach (string guid in guids)
@@ -97,11 +116,73 @@ public static class BoxTagAppSetup
             var prefab = AssetDatabase.LoadAssetAtPath<GameObject>(path);
             if (prefab != null)
             {
-                PrefabUtility.InstantiatePrefab(prefab);
-                return;
+                return (GameObject)PrefabUtility.InstantiatePrefab(prefab);
             }
         }
         Debug.LogWarning("[BoxTagAppSetup] OVRCameraRig prefab not found. Add a rig manually.");
+        return null;
+    }
+
+    // Full passthrough setup. Mirrors CameraViewer.unity from the sample:
+    //   OVRManager.isInsightPassthroughEnabled = true,
+    //   the CenterEye camera uses Solid Color with alpha 0 (not a skybox),
+    //   and no skybox in the scene. The default Unity skybox was what hid the real room.
+    private static void ConfigurePassthrough(GameObject rig)
+    {
+        // 1. Project-level passthrough support (Meta XR / OVRProjectConfig).
+        OVRProjectConfig projectConfig = OVRProjectConfig.CachedProjectConfig;
+        if (projectConfig.insightPassthroughSupport != OVRProjectConfig.FeatureSupport.Supported)
+        {
+            projectConfig.insightPassthroughSupport = OVRProjectConfig.FeatureSupport.Supported;
+            OVRProjectConfig.CommitProjectConfig(projectConfig);
+            Debug.Log("[BoxTagAppSetup] Set OVRProjectConfig.insightPassthroughSupport = Supported");
+        }
+
+        if (rig != null)
+        {
+            // 2. OVRManager on the rig: passthrough on, camera-access permission on startup.
+            var manager = rig.GetComponentInChildren<OVRManager>(true);
+            if (manager != null)
+            {
+                var so = new SerializedObject(manager);
+                SetBool(so, "isInsightPassthroughEnabled", true);
+                SetBool(so, "requestPassthroughCameraAccessPermissionOnStartup", true);
+                so.ApplyModifiedPropertiesWithoutUndo();
+            }
+            else
+            {
+                Debug.LogWarning("[BoxTagAppSetup] No OVRManager found on the rig; passthrough not enabled.");
+            }
+
+            // 3. Every camera under the rig: transparent background so the real room shows through.
+            foreach (Camera cam in rig.GetComponentsInChildren<Camera>(true))
+            {
+                cam.clearFlags = CameraClearFlags.SolidColor;
+                cam.backgroundColor = new Color(0f, 0f, 0f, 0f);
+            }
+        }
+
+        // 4. Explicit passthrough layer: reconstructed projection, underlay (behind virtual content).
+        //    RequestPermissionsOnce also creates a default layer at runtime for non-StartScene scenes.
+        var layerGo = new GameObject("OVRPassthroughLayer");
+        var layer = layerGo.AddComponent<OVRPassthroughLayer>();
+        layer.projectionSurfaceType = OVRPassthroughLayer.ProjectionSurfaceType.Reconstructed;
+        layer.overlayType = OVROverlay.OverlayType.Underlay;
+
+        // 5. No skybox and flat ambient light, so nothing from the default environment is drawn.
+        RenderSettings.skybox = null;
+        RenderSettings.ambientMode = UnityEngine.Rendering.AmbientMode.Flat;
+    }
+
+    private static void SetBool(SerializedObject so, string field, bool value)
+    {
+        SerializedProperty prop = so.FindProperty(field);
+        if (prop == null)
+        {
+            Debug.LogWarning("[BoxTagAppSetup] OVRManager has no field '" + field + "'");
+            return;
+        }
+        prop.boolValue = value;
     }
 
     private static PassthroughCameraAccess CreateCameraAccess()
@@ -121,8 +202,14 @@ public static class BoxTagAppSetup
 
     private static Renderer CreateFeedPanel()
     {
+        return CreatePanel("CameraFeedPanel");
+    }
+
+    // A unit quad that shows a texture. The scripts position and scale it at runtime.
+    private static Renderer CreatePanel(string name)
+    {
         GameObject quad = GameObject.CreatePrimitive(PrimitiveType.Quad);
-        quad.name = "CameraFeedPanel";
+        quad.name = name;
         // The panel is positioned by the script at runtime; no collider is needed.
         Object.DestroyImmediate(quad.GetComponent<MeshCollider>());
 
@@ -130,6 +217,20 @@ public static class BoxTagAppSetup
         Renderer renderer = quad.GetComponent<Renderer>();
         renderer.sharedMaterial = material;
         return renderer;
+    }
+
+    // Text that shows the detected tag IDs. Positioned by BoxTagCapture.
+    private static TextMesh CreateResultText()
+    {
+        var go = new GameObject("CaptureResultText");
+        var text = go.AddComponent<TextMesh>();
+        text.text = "Press A or right trigger to capture";
+        text.characterSize = 0.02f;
+        text.fontSize = 48;
+        text.anchor = TextAnchor.MiddleCenter;
+        text.alignment = TextAlignment.Center;
+        text.color = Color.white;
+        return text;
     }
 
     private static Material GetOrCreateMaterial()
